@@ -1,0 +1,54 @@
+# application.yml - 清理版
+spring:
+  # 数据源配置
+  datasource:
+    url: jdbc:mysql://localhost:3306/image_assistant?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8
+    username: root
+    password: 2837
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  # JPA配置
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+        format_sql: true
+
+  # 服务器配置
+  server:
+    port: 8080
+    servlet:
+      context-path: /
+
+# 项目配置
+project:
+#  upload-path: ./uploads
+  image-path: ./images
+  temp-path: ./temp
+  max-file-size: 10485760
+  upload-path: J:/uploads/
+
+# JWT配置
+jwt:
+  secret: "abc123def456ghi789jkl012mno345pqr678stu901vwx234yz567890ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+  expiration: 86400000
+
+
+# application.yml
+logging:
+  level:
+    com.yourpackage: INFO
+    org.springframework: WARN
+    org.hibernate: WARN
+  file:
+    name: logs/application.log
+  pattern:
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+
+file:
+  upload-dir: J:/uploads/
