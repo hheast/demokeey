@@ -1408,6 +1408,7 @@
     // 初始化应用
     async function initApp() {
         try {
+
             // 检查登录状态
             checkLoginStatus();
 
@@ -1701,48 +1702,7 @@
         console.log('已选择技能:', skill.name);
     }
 
-    // 加载聊天会话
-    async function loadChatSessions() {
-        try {
-            const response = await apiRequest('/chat/sessions');
-            if (response.success) {
-                chatSessions = {};
-                response.session.forEach(session => {
-                    chatSessions[session.id] = session;
-                });
-                // 设置当前聊天会话
-                if (response.session.length > 0) {
-                    currentChatId = response.session[0].id;
-                    await switchToChat(currentChatId);
-                } else {
-                    // 如果没有会话，创建一个新的
-                    await createNewChat();
-                }
 
-                updateChatHistoryList();
-                console.log('聊天会话加载成功');
-            } else {
-                throw new Error(response.message || '加载聊天会话失败');
-            }
-        } catch (error) {
-
-            console.error('加载聊天会话失败:', error);
-            // 创建默认会话作为后备
-            const defaultSession = {
-                id: 'session_1',
-                title: '新对话',
-                updatedAt: new Date(),
-                messages: [],
-                currentSkillId: null
-            };
-
-            chatSessions[defaultSession.id] = defaultSession;
-            currentChatId = defaultSession.id;
-
-            updateChatHistoryList();
-            showEmptyState();
-        }
-    }
 
     // 创建新聊天
     async function createNewChat() {
@@ -1855,50 +1815,38 @@
             return;
         }
 
+        currentChatId = chatId;
+        const chat = chatSessions[chatId];
+
+        // 先使用本地缓存的消息
+        document.querySelector('.chat-name').textContent = chat.title;
+        const messagesContainer = document.getElementById('messagesContainer');
+        messagesContainer.innerHTML = '';
+
+        // 显示本地缓存的消息
+        chat.messages.forEach(message => {
+            addMessageToUI(message);
+        });
+
+        // 可选：后台同步最新消息，但不覆盖本地数据
         try {
             const response = await apiRequest(`/chat/sessions/${chatId}/messages`);
-
-            if (response.success) {
-                const chat = chatSessions[chatId];
-                chat.messages = response.session;
-                currentChatId = chat.id;
-
-                // 更新聊天标题
-                document.querySelector('.chat-name').textContent = chat.title;
-
-                // 清空消息容器
-                const messagesContainer = document.getElementById('messagesContainer');
-                messagesContainer.innerHTML = '';
-
-                // 添加消息到界面
-                if (chat.messages && chat.messages.length > 0) {
-                    chat.messages.forEach(message => {
-                        addMessageToUI(message);
-                    });
-                } else {
-                    // 显示空状态
-                    showEmptyState();
-                }
-
-                // 恢复当前会话的技能状态
-                if (chat.currentSkillId) {
-                    const skill = allSkills.find(s => s.id === chat.currentSkillId);
-                    if (skill) {
-                        selectSkill(skill);
+            if (response.success && response.session && response.session.messages) {
+                // 只添加本地没有的新消息
+                response.session.messages.forEach(newMsg => {
+                    if (!chat.messages.some(m => m.id === newMsg.id)) {
+                        chat.messages.push(newMsg);
                     }
-                }
-
-                // 更新聊天历史列表的激活状态
+                });
+                chat.updatedAt = new Date().toISOString();
+                saveChatSessions();
                 updateChatHistoryList();
-
-                console.log('切换到聊天:', chatId);
-            } else {
-                throw new Error(response.message || '获取聊天消息失败');
             }
         } catch (error) {
-            console.error('切换聊天失败:', error);
-            alert('切换聊天失败: ' + error.message);
+            console.log('同步消息失败，使用本地缓存:', error);
         }
+
+        resetCurrentSkill();
     }
 
     // 删除聊天
@@ -1985,45 +1933,20 @@
 
             // 修复：这里应该是 response.success 而不是 response.imageData
             if (response.success) {
-                // 隐藏处理中指示器
-                hideProcessingIndicator();
-                // 清空输入框和图片
-                messageInput.value = '';
-                clearPendingImages();
-                // 创建用户消息对象
-                const userMessage = {
-                    id: 'user_msg_' + Date.now(),
-                    type: 'USER',
-                    content: text,
-                    timestamp: new Date().toISOString(),
-                    imageUrls: pendingImages.map(img => img.data)
-                };
-                // 添加用户消息到UI
-                addMessageToUI(userMessage);
+                // 添加消息到会话并保存
+                const chat = chatSessions[currentChatId];
+                chat.messages.push(userMessage);
+                chat.messages.push(botMessage);
+                chat.updatedAt = new Date().toISOString();
 
-                // 添加AI回复到UI
-                addMessageToUI(response);
-                // addMessageToUI(response.data);
-
-                // 更新聊天会话
-                if (chatSessions[currentChatId]) {
-                    if (!chatSessions[currentChatId].messages) {
-                        chatSessions[currentChatId].messages = [];
-                    }
-
-                    chatSessions[currentChatId].messages.push(userMessage);
-                    chatSessions[currentChatId].messages.push(response.session);
-                    chatSessions[currentChatId].updatedAt = new Date().toISOString();
-                    chatSessions[currentChatId].currentSkillId = currentSkill.id;
+                // 更新会话标题（如果是第一条消息）
+                if (chat.messages.filter(m => m.type === 'sent').length === 1) {
+                    chat.title = userMessage.content.substring(0, 20) + (userMessage.content.length > 20 ? '...' : '');
                 }
-                updateChatHistoryList();
-                console.log('消息发送成功');
-            } else {
-                throw new Error(response.message || '发送消息失败');
-            }
 
-            isProcessing = false;
-            sendButton.disabled = false;
+                saveChatSessions(); // 关键：保存变更
+                updateChatHistoryList();
+            }
         } catch (error) {
             console.error('发送消息失败:', error);
             hideProcessingIndicator();
@@ -2900,23 +2823,60 @@
         });
     }
 
-    function createSkillItem(skill) {
-        const skillItem = document.createElement('div');
-        skillItem.className = 'skill-item';
-        skillItem.textContent = skill.name;
-        skillItem.dataset.skillId = skill.id;
-        skillItem.dataset.command = skill.command;
+    函数 创建技能项(技能) {
+        常量 技能项 = 文档.创建元素('div');
+        技能项.类名 = '技能项';
+        技能项.文本内容 = 技能.名称;
+        技能项.数据集.技能ID = 技能.ID;
+        技能项.数据集.命令 = 技能.命令;
 
-        skillItem.addEventListener('click', () => {
-            if (!checkAuth()) return;
-            selectSkill(skill);
+        技能项.添加事件监听器('点击', () => {
+            如果 (!检查认证()) 返回;
+            选择技能(技能);
         });
 
-        return skillItem;
+        返回 技能项;
     }
 
-    // 现在代码已经完整，可以正常工作了
-</script>
-</body>
+    // 修改保存聊天会话函数，确保每次数据变更都被保存
+    函数 保存聊天会话() {
+        尝试 {
+            localStorage.setItem('chatSessions', JSON.stringify(chatSessions));
+            // 同时保存当前聊天ID，避免刷新后丢失当前会话
+            localStorage.setItem('currentChatId', currentChatId);
+        } 捕获 (e) {
+            控制台.错误('保存聊天记录失败:', e);
+        }
+    }
+
+    // 修改加载聊天会话函数
+    函数 加载聊天会话() {
+        尝试{
+            常量 保存 = localStorage.getItem('chatSessions');
+            常量 保存当前ID = 本地存储.获取项('当前聊天ID');
+
+            如果 (保存) {
+                chatSessions = JSON.parse(saved);
+            }
+
+            如果 (保存的当前ID && 聊天会话[保存的当前ID]) {
+                当前聊天ID = 保存的当前ID;
+            } 否则 如果 (对象.键(聊天会话).长度 > 0) {
+                当前聊天ID = 对象.键(聊天会话)[0];
+            } 否则{
+                创建新聊天();
+            }
+
+            更新聊天历史记录列表();
+        } 捕获 (e) {
+            控制台.错误('加载聊天记录失败:', e);
+            // 加载失败时初始化新会话
+            聊天会话 = {};
+            创建新聊天();
+        }
+    }
+
+</脚本>
+</身体>
 </html>
 
