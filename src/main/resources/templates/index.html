@@ -1399,34 +1399,36 @@
         }
     }
 
-
-    // 初始化应用
+    // 在页面加载完成后重新绑定事件（避免DOM未加载导致绑定失败）
     document.addEventListener('DOMContentLoaded', function() {
-        initApp();
+        // 新建对话按钮
+        const newChatBtn = document.getElementById('newChatBtn');
+        if (newChatBtn) {
+            newChatBtn.addEventListener('click', createNewChat);
+        } else {
+            console.error('未找到newChatBtn元素');
+        }
+
+        // 发送按钮
+        const sendButton = document.getElementById('sendButton');
+        if (sendButton) {
+            sendButton.addEventListener('click', sendMessage);
+        } else {
+            console.error('未找到sendButton元素');
+        }
+
+        // 输入框回车发送
+        const messageInput = document.getElementById('messageInput');
+        if (messageInput) {
+            messageInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                }
+            });
+        }
     });
 
-    // 初始化应用
-    async function initApp() {
-        try {
-
-            // 检查登录状态
-            checkLoginStatus();
-
-            // 加载技能列表
-            await loadSkills();
-
-            // 加载聊天会话
-            await loadChatSessions();
-
-            // 绑定事件
-            bindEvents();
-
-            console.log('应用初始化完成');
-        } catch (error) {
-            console.error('应用初始化失败:', error);
-            alert('应用初始化失败，请刷新页面重试');
-        }
-    }
 
     // 检查登录状态
     function checkLoginStatus() {
@@ -1706,39 +1708,65 @@
 
     // 创建新聊天
     async function createNewChat() {
-        if (!checkAuth()) return null;
+        // 1. 优化权限校验逻辑，避免误判
+        if (!checkAuth()) {
+            console.log('未授权，尝试重新获取权限');
+            // 若权限校验失败，可尝试刷新授权或引导登录（根据实际场景调整）
+            if (!await refreshAuth()) {
+                alert('请先登录后再创建对话');
+                return null;
+            }
+        }
 
         try {
+            // 2. 明确请求参数，确保后端能正确处理
             const response = await apiRequest('/chat/sessions', {
                 method: 'POST',
-                body: JSON.stringify({ title: '新对话' })
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: '新对话' }) // 显式指定标题
             });
 
-            if (response.success) {
-                const newSession = response.session;
+            // 3. 严格校验后端响应格式
+            if (response?.success && response?.data?.id) {
+                const newSession = {
+                    id: response.data.id,
+                    title: response.data.title || '新对话',
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString(),
+                    messages: response.data.messages || [], // 强制初始化messages
+                    currentSkillId: null
+                };
+                // 4. 确保会话正确存入chatSessions
                 chatSessions[newSession.id] = newSession;
                 currentChatId = newSession.id;
 
+                // 5. 同步更新UI
                 updateChatHistoryList();
                 showEmptyState();
-
+                console.log('新建对话成功，ID:', newSession.id);
                 return newSession.id;
             } else {
-                throw new Error(response.message || '创建新聊天失败');
+                throw new Error('后端返回格式错误，缺少会话ID');
             }
+
         } catch (error) {
-            const status = parseInt(error.message.match(/status:\s*(\d+)/)?.[1] || 0);
-            // console.error('创建新聊天失败:', error);
-            // alert('创建新聊天失败: ' + error.message);
-            if (status === 400 || status === 401) {
-                loginout()
-                checkAuth()
-            }else {
-                alert('创建新聊天失败: ' + error.message);
-            }
-
-
+            console.error('新建对话失败详情:', error);
+            // 区分错误类型，避免误导用户
+            const errorMsg = error.message.includes('401') ?
+                '登录已过期，请重新登录' :
+                '创建对话失败，请稍后重试';
+            alert(errorMsg);
             return null;
+        }
+    }
+
+    // 新增：刷新授权状态的辅助函数（根据实际授权逻辑实现）
+    async function refreshAuth() {
+        try {
+            const response = await apiRequest('/auth/refresh');
+            return response?.success;
+        } catch (error) {
+            return false;
         }
     }
 
@@ -1810,43 +1838,30 @@
 
     // 切换到指定聊天
     async function switchToChat(chatId) {
-        if (!chatSessions[chatId]) {
-            console.error('聊天会话不存在:', chatId);
+        if (!chatId || !chatSessions[chatId]) {
+            console.error('无效的会话ID:', chatId);
+            alert('会话不存在');
             return;
         }
 
-        currentChatId = chatId;
-        const chat = chatSessions[chatId];
-
-        // 先使用本地缓存的消息
-        document.querySelector('.chat-name').textContent = chat.title;
-        const messagesContainer = document.getElementById('messagesContainer');
-        messagesContainer.innerHTML = '';
-
-        // 显示本地缓存的消息
-        chat.messages.forEach(message => {
-            addMessageToUI(message);
-        });
-
-        // 可选：后台同步最新消息，但不覆盖本地数据
         try {
+            // 加载会话历史消息
             const response = await apiRequest(`/chat/sessions/${chatId}/messages`);
-            if (response.success && response.session && response.session.messages) {
-                // 只添加本地没有的新消息
-                response.session.messages.forEach(newMsg => {
-                    if (!chat.messages.some(m => m.id === newMsg.id)) {
-                        chat.messages.push(newMsg);
-                    }
-                });
-                chat.updatedAt = new Date().toISOString();
-                saveChatSessions();
+            if (response?.success) {
+                // 强制初始化messages，避免后续push错误
+                chatSessions[chatId].messages = response.data?.messages || [];
+                currentChatId = chatId;
+                // 更新UI
+                renderChatMessages(); // 重新渲染消息列表
+                document.querySelector('.chat-name').textContent = chatSessions[chatId].title;
                 updateChatHistoryList();
+            } else {
+                throw new Error('获取会话消息失败');
             }
         } catch (error) {
-            console.log('同步消息失败，使用本地缓存:', error);
+            console.error('切换会话失败:', error);
+            alert('切换对话失败，请重试');
         }
-
-        resetCurrentSkill();
     }
 
     // 删除聊天
@@ -1885,74 +1900,116 @@
     }
 
     // 发送消息
-    // 发送消息
     async function sendMessage() {
-        if (!checkAuth()) return;
+        // 1. 权限校验优化
+        if (!checkAuth()) {
+            if (!await refreshAuth()) {
+                alert('请先登录后再发送消息');
+                return;
+            }
+        }
 
+        // 2. 防止重复发送，但保留状态日志
         if (isProcessing) {
-            return; // 防止重复发送
+            console.log('正在处理中，避免重复发送');
+            return;
         }
 
         const messageInput = document.getElementById('messageInput');
         const text = messageInput.value.trim();
         const sendButton = document.getElementById('sendButton');
 
-        // 检查是否已选择技能
+        // 3. 技能选择校验（保留但优化提示）
         if (!currentSkill) {
-            alert('请先选择一个技能！');
+            alert('请先从左侧选择一个技能哦~');
             return;
         }
 
-        if (text === '' && pendingImages.length === 0) {
+        // 4. 输入内容校验（允许纯图片发送，放宽文本空格限制）
+        if (!text && pendingImages.length === 0) {
+            alert('请输入消息内容或上传图片~');
             return;
         }
 
+        // 5. 会话状态校验（关键！确保当前会话存在）
+        if (!currentChatId || !chatSessions[currentChatId]) {
+            console.log('当前会话不存在，尝试自动创建');
+            const newChatId = await createNewChat();
+            if (!newChatId) {
+                alert('无法创建会话，请重试');
+                return;
+            }
+        }
+
+        // 6. 初始化会话消息列表（双重保障）
+        if (!chatSessions[currentChatId].messages) {
+            chatSessions[currentChatId].messages = [];
+        }
+
+        // 7. 构建用户消息并临时显示
+        const userMessage = {
+            id: 'user_' + Date.now(),
+            role: 'user',
+            content: text,
+            images: pendingImages.map(img => img.data),
+            timestamp: new Date().toISOString()
+        };
+        chatSessions[currentChatId].messages.push(userMessage);
+        addMessageToUI(userMessage); // 先显示用户消息，提升体验
+        messageInput.value = '';
+        clearPendingImages();
+
+        // 8. 处理发送状态
         isProcessing = true;
         sendButton.disabled = true;
+        showProcessingIndicator();
 
         try {
-            // 显示处理中指示器
-            showProcessingIndicator();
-
-            // 准备请求数据
-            const requestData = {
-                sessionId: currentChatId,
-                content: text,
-                skillId: currentSkill.id,
-                imageUrls: pendingImages.map(img => img.data)
-            };
-
-            // 发送消息到后端
+            // 9. 发送请求到后端（完善参数和错误处理）
             const response = await apiRequest('/chat/send', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(requestData)
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sessionId: currentChatId,
+                    content: text,
+                    skillId: currentSkill.id,
+                    imageUrls: pendingImages.map(img => img.data)
+                })
             });
 
-            // 修复：这里应该是 response.success 而不是 response.imageData
-            if (response.success) {
-                // 添加消息到会话并保存
-                const chat = chatSessions[currentChatId];
-                chat.messages.push(userMessage);
-                chat.messages.push(botMessage);
-                chat.updatedAt = new Date().toISOString();
-
-                // 更新会话标题（如果是第一条消息）
-                if (chat.messages.filter(m => m.type === 'sent').length === 1) {
-                    chat.title = userMessage.content.substring(0, 20) + (userMessage.content.length > 20 ? '...' : '');
-                }
-
-                saveChatSessions(); // 关键：保存变更
+            if (response?.success && response?.data) {
+                // 10. 处理AI回复
+                const aiMessage = {
+                    id: 'ai_' + Date.now(),
+                    role: 'assistant',
+                    content: response.data.content || '已收到您的消息',
+                    timestamp: new Date().toISOString()
+                };
+                chatSessions[currentChatId].messages.push(aiMessage);
+                addMessageToUI(aiMessage);
+                chatSessions[currentChatId].updatedAt = new Date().toISOString();
                 updateChatHistoryList();
+                console.log('消息发送成功');
+            } else {
+                throw new Error(response?.message || '后端未返回有效回复');
             }
+
         } catch (error) {
-            console.error('发送消息失败:', error);
-            hideProcessingIndicator();
-            alert('发送消息失败: ' + error.message);
+            console.error('发送消息失败详情:', error);
+            // 显示错误消息到UI
+            const errorMessage = {
+                id: 'error_' + Date.now(),
+                role: 'system',
+                content: '发送失败：' + error.message,
+                timestamp: new Date().toISOString()
+            };
+            chatSessions[currentChatId].messages.push(errorMessage);
+            addMessageToUI(errorMessage);
+        } finally {
+            // 11. 恢复发送状态（无论成功失败都执行）
             isProcessing = false;
             sendButton.disabled = false;
+            hideProcessingIndicator();
         }
     }
 
@@ -2823,60 +2880,60 @@
         });
     }
 
-    函数 创建技能项(技能) {
-        常量 技能项 = 文档.创建元素('div');
-        技能项.类名 = '技能项';
-        技能项.文本内容 = 技能.名称;
-        技能项.数据集.技能ID = 技能.ID;
-        技能项.数据集.命令 = 技能.命令;
+    function createSkillItem(skill) {
+        const skillItem = document.createElement('div');
+        skillItem.className = 'skill-item';
+        skillItem.textContent = skill.name;
+        skillItem.dataset.skillId = skill.id;
+        skillItem.dataset.command = skill.command;
 
-        技能项.添加事件监听器('点击', () => {
-            如果 (!检查认证()) 返回;
-            选择技能(技能);
+        skillItem.addEventListener('click', () => {
+            if (!checkAuth()) return;
+            selectSkill(skill);
         });
 
-        返回 技能项;
+        return skillItem;
     }
 
     // 修改保存聊天会话函数，确保每次数据变更都被保存
-    函数 保存聊天会话() {
-        尝试 {
+    function saveChatSessions() {
+        try {
             localStorage.setItem('chatSessions', JSON.stringify(chatSessions));
             // 同时保存当前聊天ID，避免刷新后丢失当前会话
             localStorage.setItem('currentChatId', currentChatId);
-        } 捕获 (e) {
-            控制台.错误('保存聊天记录失败:', e);
+        } catch (e) {
+            console.error('保存聊天记录失败:', e);
         }
     }
 
     // 修改加载聊天会话函数
-    函数 加载聊天会话() {
-        尝试{
-            常量 保存 = localStorage.getItem('chatSessions');
-            常量 保存当前ID = 本地存储.获取项('当前聊天ID');
+    function loadChatSessions() {
+        try {
+            const saved = localStorage.getItem('chatSessions');
+            const savedCurrentId = localStorage.getItem('currentChatId');
 
-            如果 (保存) {
+            if (saved) {
                 chatSessions = JSON.parse(saved);
             }
 
-            如果 (保存的当前ID && 聊天会话[保存的当前ID]) {
-                当前聊天ID = 保存的当前ID;
-            } 否则 如果 (对象.键(聊天会话).长度 > 0) {
-                当前聊天ID = 对象.键(聊天会话)[0];
-            } 否则{
-                创建新聊天();
+            if (savedCurrentId && chatSessions[savedCurrentId]) {
+                currentChatId = savedCurrentId;
+            } else if (Object.keys(chatSessions).length > 0) {
+                currentChatId = Object.keys(chatSessions)[0];
+            } else {
+                createNewChat();
             }
 
-            更新聊天历史记录列表();
-        } 捕获 (e) {
-            控制台.错误('加载聊天记录失败:', e);
+            updateChatHistoryList();
+        } catch (e) {
+            console.error('加载聊天记录失败:', e);
             // 加载失败时初始化新会话
-            聊天会话 = {};
-            创建新聊天();
+            chatSessions = {};
+            createNewChat();
         }
     }
 
-</脚本>
-</身体>
+</script>
+</body>
 </html>
 
