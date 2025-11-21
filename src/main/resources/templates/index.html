@@ -1338,6 +1338,12 @@
     // 配置后端API地址
     const API_BASE_URL = '/api'; // 请替换为实际的后端API地址
 
+    // 本地存储键名定义
+    const STORAGE_KEYS = {
+        CHAT_SESSIONS: 'image_assistant_chat_sessions',
+        CURRENT_CHAT_ID: 'image_assistant_current_chat_id'
+    };
+
     // 存储聊天数据
     let chatSessions = {};
     let currentChatId = null;
@@ -1348,6 +1354,10 @@
     let isLoggedIn = false;
     let currentUser = null;
     let vipPoints = 1250; // 初始VIP积分
+
+    // 登录态 Token（根据实际项目修改：从 Cookie 或 localStorage 获取）
+    const AUTH_TOKEN = localStorage.getItem('auth_token') || document.cookie.split('; ').find(row => row.startsWith('auth_token='))?.split('=')[1];
+
 
     // API请求函数
     async function apiRequest(endpoint, options = {}) {
@@ -1402,30 +1412,20 @@
 
     // 初始化应用
     document.addEventListener('DOMContentLoaded', function() {
-        initApp();
+        loadFromLocalStorage();
+        if (Object.keys(chatSessions).length === 0) {
+            createNewChat();
+        } else {
+            const lastChatId = localStorage.getItem(STORAGE_KEYS.CURRENT_CHAT_ID);
+            if (lastChatId && chatSessions[lastChatId]) {
+                switchToChat(lastChatId);
+            } else {
+                switchToChat(Object.keys(chatSessions)[0]);
+            }
+        }
+        bindEvents();
     });
 
-    // 初始化应用
-    async function initApp() {
-        try {
-            // 检查登录状态
-            checkLoginStatus();
-
-            // 加载技能列表
-            await loadSkills();
-
-            // 加载聊天会话
-            await loadChatSessions();
-
-            // 绑定事件
-            bindEvents();
-
-            console.log('应用初始化完成');
-        } catch (error) {
-            console.error('应用初始化失败:', error);
-            alert('应用初始化失败，请刷新页面重试');
-        }
-    }
 
     // 检查登录状态
     function checkLoginStatus() {
@@ -2915,7 +2915,6 @@
         return skillItem;
     }
 
-    // 现在代码已经完整，可以正常工作了
 </script>
 </body>
 </html>
