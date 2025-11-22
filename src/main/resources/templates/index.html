@@ -1554,7 +1554,7 @@
                 method: 'POST',
                 body: JSON.stringify({ username, password })
             });
-            alert(response.success)
+
             if (response.success) {
                 // 登录成功
 
@@ -1740,17 +1740,19 @@
                 id: Date.now(),
                 type: 'sent',
                 content: text,
-                images:  pendingImages,
+                images:  pendingImages.map(img => img.data),
                 timestamp: new Date().toISOString()
             };
             const currentChat = chatSessions[currentChatId];
             currentChat.messages.push(userMessage);
             currentChat.updatedAt = new Date().toISOString();
+            saveToLocalStorage();
+
             // 7. 首次发送消息时更新聊天标题
             if (currentChat.messages.length === 2) {
                 currentChat.title = text.length > 15 ? text.substring(0, 15) + '...' : text;
             }
-            // 8. 更新UI + 清空输入
+
 
 
 
@@ -1768,22 +1770,18 @@
                     chatId: currentChatId,
                     message: text,
                     skill: currentSkill,
-                    images: pendingImages,
+                    images:  pendingImages,
                 }),
                 credentials: 'include' // 跨域时携带Cookie（如果后端用Cookie认证）
             });
 
-            messageInput.value = '';
-            clearPendingImages(); // 清空待发送图片
-            saveToLocalStorage(); // 保存到本地存储
-            scrollToBottom(); // 滚动到最新消息
-            console.log('发送用户消息：', userMessage);
 
             // 11. 解析后端响应
             const result = await response.json();
             // 添加用户消息到UI
             addMessageToUI(userMessage);
             addMessageToUI(result);
+
             if (!response.ok) {
                 throw new Error(result.message || `请求失败（状态码：${response.status}）`);
             }
@@ -1791,7 +1789,11 @@
                 throw new Error(result.message || '后端处理失败');
             }
 
-
+            messageInput.value = '';
+            clearPendingImages(); // 清空待发送图片
+            // saveToLocalStorage(); // 保存到本地存储
+            scrollToBottom(); // 滚动到最新消息
+            console.log('发送用户消息：', userMessage);
             // 12. 创建助手回复并更新UI
             const assistantMessage = {
                 id: Date.now() + 1,
@@ -1803,7 +1805,7 @@
             currentChat.messages.push(assistantMessage);
             currentChat.updatedAt = new Date().toISOString();
 
-            saveToLocalStorage(); // 保存回复到本地存储
+            // saveToLocalStorage(); // 保存回复到本地存储
             console.log('接收助手回复：', assistantMessage);
         } catch (error) {
             console.error('发送消息失败：', error);
@@ -1930,92 +1932,35 @@
     }
 
     // ================= UI渲染辅助函数 =================
-    /** 添加消息到界面 */
     function addMessageToUI(message) {
-        const messagesContainer = document.getElementById('messagesContainer');
-        const emptyState = document.getElementById('emptyState');
+        const messagesContainer = document.getElementById(CONFIG.MESSAGES_CONTAINER);
+        if (!messagesContainer) return;
 
-        if (emptyState) {
-            emptyState.remove();
-        }
         const messageDiv = document.createElement('div');
-        console.log(message)
+        messageDiv.className = `message ${message.type}`;  // type: 'sent' 或 'received'
 
-
-        messageDiv.className = `message ${message.type === 'sent' ? 'sent' : 'received'}`;
-        messageDiv.dataset.messageId = message.id;
-
-        // 消息头像
-        const messageAvatar = document.createElement('div');
-        messageAvatar.className = 'message-avatar';
-        messageAvatar.innerHTML = message.type === 'USER' ?
-            '<i class="fas fa-user"></i>' : '<i class="fas fa-robot"></i>';
-
-        // 消息内容
-        const messageContent = document.createElement('div');
-        messageContent.className = 'message-content';
-
-        // 文本内容
+        // 消息内容（文本 + 图片）
+        let contentHtml = '';
+        // 显示文本内容
         if (message.content) {
-            const messageText = document.createElement('div');
-            messageText.className = 'message-text';
-            messageText.textContent = message.content;
-            messageContent.appendChild(messageText);
+            contentHtml += `<div class="message-content">${message.content}</div>`;
         }
-
-        // 图片内容 - 修复：处理base64图片数据
-        let imagesToShow = [];
-
-        // 处理 imageUrls 数组
-        if (message.imageUrls && message.imageUrls.length > 0) {
-            imagesToShow = imagesToShow.concat(message.imageUrls);
-        }
-
-        // 处理单个 imageData（base64格式）
-        if (message.imageData) {
-            imagesToShow.push(message.imageData);
-        }
-
-        // 处理后端返回的图片数据（可能在不同的字段中）
-        if (message.data && typeof message.data === 'string' && message.data.startsWith('data:image/')) {
-            imagesToShow.push(message.data);
-        }
-
-        if (imagesToShow.length > 0) {
-            const messageImages = document.createElement('div');
-            messageImages.className = 'message-images';
-
-            imagesToShow.forEach(imageData => {
-                const img = document.createElement('img');
-                img.src = imageData;
-                img.alt = '消息图片';
-                img.className = 'message-image';
-                img.onclick = () => previewImage(imageData);
-                messageImages.appendChild(img);
+        // 显示图片（关键：遍历images数组渲染图片）
+        if (message.images && message.images.length > 0) {
+            message.images.forEach(imgDataUrl => {
+                contentHtml += `<div class="message-image"><img src="${imgDataUrl}" alt="聊天图片" style="max-width: 300px; max-height: 300px; border-radius: 8px;"></div>`;
             });
-
-            messageContent.appendChild(messageImages);
         }
 
-        // 消息时间
-        const messageTime = document.createElement('div');
-        messageTime.className = 'message-time';
-        const timestamp = new Date(message.timestamp);
-        messageTime.textContent = timestamp.toLocaleTimeString('zh-CN', {
-            hour: '2-digit', minute: '2-digit'
-        });
-        messageContent.appendChild(messageTime);
-
-        if (message.type === 'USER') {
-            messageDiv.appendChild(messageContent);
-            messageDiv.appendChild(messageAvatar);
-        } else {
-            messageDiv.appendChild(messageAvatar);
-            messageDiv.appendChild(messageContent);
-        }
+        // 组装消息DOM
+        messageDiv.innerHTML = `
+        <div class="message-avatar">
+            <i class="${message.type === 'sent' ? 'fas fa-user' : 'fas fa-robot'}"></i>
+        </div>
+        <div class="message-bubble">${contentHtml}</div>
+    `;
 
         messagesContainer.appendChild(messageDiv);
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
 
     // 重置当前技能
@@ -2138,9 +2083,21 @@
                 const historyItem = document.createElement('div');
                 historyItem.className = `history-item ${chat.id === currentChatId ? 'active' : ''}`;
                 historyItem.dataset.chatId = chat.id;
-                // 最后一条消息预览
-                const lastMessage = chat.messages[chat.messages.length - 1];
-                const previewText = lastMessage.content.length > 20 ? lastMessage.content.substring(0, 20) + '...' : lastMessage.content;
+               
+
+                // 获取最后一条消息作为预览（补充图片判断）
+                const lastMessage = chat.messages && chat.messages.length > 0 ? chat.messages[chat.messages.length - 1] : null;
+                let previewText;
+                if (!lastMessage) {
+                    previewText = '新对话';
+                } else if (lastMessage.images && lastMessage.images.length > 0) {
+                    previewText = '[图片]';  // 图片消息显示提示
+                } else {
+                    previewText = lastMessage.content && lastMessage.content.length > 20
+                        ? lastMessage.content.substring(0, 20) + '...'
+                        : lastMessage.content;
+                }
+
                 // 聊天项HTML
                 historyItem.innerHTML = `
                 <div class="history-icon" style="margin-right: 8px;">
