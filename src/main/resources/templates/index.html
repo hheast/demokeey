@@ -1335,6 +1335,7 @@
 </div>
 
 <script>
+
     // 配置后端API地址
     const API_BASE_URL = '/api'; // 请替换为实际的后端API地址
 
@@ -1343,21 +1344,41 @@
         CHAT_SESSIONS: 'image_assistant_chat_sessions',
         CURRENT_CHAT_ID: 'image_assistant_current_chat_id'
     };
+    // ================= 基础配置（根据页面实际结构修改）=================
+    const CONFIG = {
+        // DOM元素ID（必须与页面HTML中的ID完全一致）
+        MESSAGE_INPUT: 'messageInput',
+        SEND_BTN: 'sendBtn',
+        MESSAGES_CONTAINER: 'messagesContainer',
+        CHAT_HISTORY: 'chatHistory',
+        NEW_CHAT_BTN: 'newChatBtn',
+        IMAGE_UPLOAD: 'imageUpload',
+        IMAGE_PREVIEW_CONTAINER: 'imagePreviewContainer',
+        CHAT_NAME: 'chatName', // 聊天标题元素的ID（原代码用class，这里统一用ID更可靠）
+        SKILL_ITEM_CLASS: 'skill-item', // 技能选择项的class
+        // 本地存储键名
+        STORAGE_KEYS: {
+            CHAT_SESSIONS: 'image_assistant_chat_sessions',
+            CURRENT_CHAT_ID: 'image_assistant_current_chat_id'
+        },
+        // 后端接口（根据实际接口地址修改）
+        // API_URL: '/chat/process'
+        API_URL: '/api'
+    };
 
-    // 存储聊天数据
-    let chatSessions = {};
-    let currentChatId = null;
-    let pendingImages = [];
-    let currentSkill = null;
+    // ================= 全局变量（初始化默认值）=================
+    let chatSessions = {}; // 所有聊天会话
+    let currentChatId = null; // 当前激活的聊天ID
+    let pendingImages = []; // 待发送的图片
+    let currentSkill = null; // 当前选择的技能
+    let isProcessing = false; // 是否正在处理请求（防止重复发送）
     let allSkills = [];
-    let isProcessing = false;
     let isLoggedIn = false;
     let currentUser = null;
     let vipPoints = 1250; // 初始VIP积分
-
-    // 登录态 Token（根据实际项目修改：从 Cookie 或 localStorage 获取）
-    const AUTH_TOKEN = localStorage.getItem('auth_token') || document.cookie.split('; ').find(row => row.startsWith('auth_token='))?.split('=')[1];
-
+    
+    // 登录态Token（根据项目实际登录逻辑修改，这里先留空，后续可扩展）
+    let AUTH_TOKEN = localStorage.getItem('auth_token') || document.cookie.split('; ').find(row => row.startsWith('auth_token='))?.split('=')[1] || '';
 
     // API请求函数
     async function apiRequest(endpoint, options = {}) {
@@ -1408,34 +1429,21 @@
             throw error;
         }
     }
-
-
-    // 初始化应用
-    document.addEventListener('DOMContentLoaded', function() {
-        loadFromLocalStorage();
-        if (Object.keys(chatSessions).length === 0) {
-            createNewChat();
-        } else {
-            const lastChatId = localStorage.getItem(STORAGE_KEYS.CURRENT_CHAT_ID);
-            if (lastChatId && chatSessions[lastChatId]) {
-                switchToChat(lastChatId);
-            } else {
-                switchToChat(Object.keys(chatSessions)[0]);
-            }
-        }
-        bindEvents();
-    });
-
-
-    // 检查登录状态
-    function checkLoginStatus() {
-        const savedUser = localStorage.getItem('currentUser');
-        const token = localStorage.getItem('token');
-
-        if (savedUser && token) {
-            currentUser = JSON.parse(savedUser);
-            isLoggedIn = true;
-            updateUserInterface();
+    // ================= 本地存储核心函数 =================
+    /** 从本地存储加载聊天记录 */
+    function loadFromLocalStorage() {
+        try {
+            const savedSessions = localStorage.getItem(CONFIG.STORAGE_KEYS.CHAT_SESSIONS);
+            const savedCurrentChatId = localStorage.getItem(CONFIG.STORAGE_KEYS.CURRENT_CHAT_ID);
+            // 加载会话（默认空对象）
+            chatSessions = savedSessions ? JSON.parse(savedSessions) : {};
+            // 加载当前聊天ID（默认第一个会话ID）
+            currentChatId = savedCurrentChatId && chatSessions[savedCurrentChatId] ? savedCurrentChatId : Object.keys(chatSessions)[0] || null;
+            console.log('从本地存储加载成功：', { chatSessions, currentChatId });
+        } catch (error) {
+            console.error('加载本地存储失败：', error);
+            chatSessions = {};
+            currentChatId = null;
         }
     }
 
@@ -1455,17 +1463,6 @@
             messageInput.placeholder = '请先登录并选择技能';
         }
     }
-
-    // 显示登录模态框
-    function showLoginModal() {
-        document.getElementById('loginModal').classList.add('active');
-    }
-
-    // 隐藏登录模态框
-    function hideLoginModal() {
-        document.getElementById('loginModal').classList.remove('active');
-    }
-
     // 处理登录
     async function handleLogin() {
         const username = document.getElementById('loginUsername').value.trim();
@@ -1493,7 +1490,7 @@
                 updateUserInterface();
                 hideLoginModal();
 
-                // alert('登录成功！');
+                alert('登录成功！');
             } else {
                 alert(response.message || '登录失败');
             }
@@ -1503,269 +1500,61 @@
         }
     }
 
-    // 处理注册
-    async function handleRegister() {
-        const username = document.getElementById('registerUsername').value.trim();
-        const email = document.getElementById('registerEmail').value.trim();
-        const password = document.getElementById('registerPassword').value.trim();
-        const confirmPassword = document.getElementById('confirmPassword').value.trim();
 
-        if (!username || !email || !password || !confirmPassword) {
-            alert('请填写所有字段');
-            return;
-        }
-
-        if (password !== confirmPassword) {
-            alert('两次输入的密码不一致');
-            return;
-        }
-
-        if (password.length < 6) {
-            alert('密码长度至少6位');
-            return;
-        }
-
+    /** 保存聊天记录到本地存储 */
+    function saveToLocalStorage() {
         try {
-            const response = await apiRequest('/auth/register', {
-                method: 'POST',
-                body: JSON.stringify({ username, email, password,confirmPassword})
-            });
-
-            if (response.success) {
-                alert('注册成功！请登录');
-                // 切换到登录标签
-                document.querySelector('.login-tab[data-tab="login"]').click();
-                // 清空注册表单
-                document.getElementById('registerUsername').value = '';
-                document.getElementById('registerEmail').value = '';
-                document.getElementById('registerPassword').value = '';
-                document.getElementById('confirmPassword').value = '';
-            } else {
-                alert(response.message || '注册失败');
+            localStorage.setItem(CONFIG.STORAGE_KEYS.CHAT_SESSIONS, JSON.stringify(chatSessions));
+            if (currentChatId) {
+                localStorage.setItem(CONFIG.STORAGE_KEYS.CURRENT_CHAT_ID, currentChatId);
             }
+            console.log('保存到本地存储成功');
         } catch (error) {
-            console.error('注册失败:', error);
-            alert('注册失败，请检查网络连接或稍后重试');
+            console.error('保存本地存储失败：', error);
         }
     }
 
-    // 处理QQ登录
-    function handleQQLogin() {
-        alert('QQ登录功能需要后端支持，当前为演示模式');
-        // 在实际应用中，这里应该重定向到QQ OAuth授权页面
-    }
-
-    // 处理微信登录
-    function handleWechatLogin() {
-        alert('微信登录功能需要后端支持，当前为演示模式');
-        // 在实际应用中，这里应该显示微信二维码
-    }
-
-    // 检查登录状态
-    function checkAuth() {
-        if (!isLoggedIn) {
-            showLoginModal();
-            return false;
+    // ================= 聊天会话核心函数 =================
+    /** 初始化聊天会话（无会话则创建新的） */
+    function initChatSessions() {
+        if (Object.keys(chatSessions).length === 0) {
+            console.log('无历史会话，创建新对话');
+            createNewChat();
+        } else {
+            // 切换到当前聊天ID（默认第一个）
+            switchToChat(currentChatId || Object.keys(chatSessions)[0]);
         }
-        return true;
     }
 
-    // 加载技能列表
-    async function loadSkills() {
+    /** 创建新聊天会话 */
+    function createNewChat() {
         try {
-            const response = await apiRequest('/skills');
-
-            if (response.success) {
-                allSkills = response.data;
-                renderSkills();
-                console.log('技能列表加载成功');
-            } else {
-                throw new Error(response.message || '加载技能列表失败');
-            }
-        } catch (error) {
-            console.error('加载技能列表失败:', error);
-            // 使用默认技能作为后备
-            allSkills = getDefaultSkills();
-            renderSkills();
-        }
-    }
-
-    // 获取默认技能（后备方案）
-    function getDefaultSkills() {
-        return [
-            { id: 'skill_1', name: '文本摘要', command: '/summarize', category: 'TEXT' },
-            { id: 'skill_2', name: '英文翻译', command: '/translate_en', category: 'TEXT' },
-            { id: 'skill_3', name: '中文翻译', command: '/translate_zh', category: 'TEXT' },
-            { id: 'skill_4', name: '语法检查', command: '/grammar_check', category: 'TEXT' },
-            { id: 'skill_5', name: '情感分析', command: '/sentiment_analysis', category: 'TEXT' },
-            { id: 'skill_6', name: '关键词提取', command: '/extract_keywords', category: 'TEXT' },
-            { id: 'skill_7', name: '文本分类', command: '/text_classification', category: 'TEXT' },
-            { id: 'skill_8', name: '命名实体识别', command: '/ner', category: 'TEXT' },
-            { id: 'skill_9', name: '文本纠错', command: '/text_correction', category: 'TEXT' },
-            { id: 'skill_10', name: '文本生成', command: '/text_generation', category: 'TEXT' },
-            { id: 'skill_11', name: '代码解释', command: '/explain_code', category: 'CODE' },
-            { id: 'skill_12', name: '代码生成', command: '/generate_code', category: 'CODE' },
-            { id: 'skill_13', name: '代码优化', command: '/optimize_code', category: 'CODE' },
-            { id: 'skill_14', name: '代码调试', command: '/debug_code', category: 'CODE' },
-            { id: 'skill_15', name: '问答系统', command: '/qa', category: 'ADVANCED' },
-            { id: 'skill_16', name: '文本相似度', command: '/text_similarity', category: 'ADVANCED' },
-            { id: 'skill_17', name: '文本聚类', command: '/text_clustering', category: 'ADVANCED' },
-            { id: 'skill_18', name: '文本去重', command: '/deduplicate', category: 'ADVANCED' },
-            { id: 'skill_19', name: '文本格式化', command: '/format_text', category: 'ADVANCED' },
-            { id: 'skill_20', name: '文本加密', command: '/encrypt_text', category: 'ADVANCED' }
-        ];
-    }
-
-    // 渲染技能列表
-    function renderSkills() {
-        const textSkillsContainer = document.getElementById('textSkills');
-        const codeSkillsContainer = document.getElementById('codeSkills');
-        const advancedSkillsContainer = document.getElementById('advancedSkills');
-
-        // 清空容器
-        textSkillsContainer.innerHTML = '';
-        codeSkillsContainer.innerHTML = '';
-        advancedSkillsContainer.innerHTML = '';
-
-        // 按类别分组
-        allSkills.forEach(skill => {
-            const skillItem = createSkillItem(skill);
-
-            switch(skill.category) {
-                case 'TEXT':
-                    textSkillsContainer.appendChild(skillItem);
-                    break;
-                case 'CODE':
-                    codeSkillsContainer.appendChild(skillItem);
-                    break;
-                case 'ADVANCED':
-                    advancedSkillsContainer.appendChild(skillItem);
-                    break;
-                default:
-                    textSkillsContainer.appendChild(skillItem);
-            }
-        });
-    }
-
-    // 创建技能项
-    function createSkillItem(skill) {
-        const skillItem = document.createElement('div');
-        skillItem.className = 'skill-item';
-        skillItem.textContent = skill.name;
-        skillItem.dataset.skillId = skill.id;
-        skillItem.dataset.command = skill.command;
-
-        skillItem.addEventListener('click', () => {
-            if (!checkAuth()) return;
-            selectSkill(skill);
-        });
-
-        return skillItem;
-    }
-
-    // 选择技能
-    function selectSkill(skill) {
-        // 移除之前选中的技能
-        if (currentSkill) {
-            const previousSkillItem = document.querySelector(`.skill-item[data-skill-id="${currentSkill.id}"]`);
-            if (previousSkillItem) {
-                previousSkillItem.classList.remove('active');
-            }
-        }
-
-        // 设置当前技能
-        currentSkill = skill;
-
-        // 更新技能选择器按钮状态
-        const skillSelectorBtn = document.getElementById('skillSelectorBtn');
-        const currentSkillIndicator = document.getElementById('currentSkillIndicator');
-
-        skillSelectorBtn.classList.add('active');
-        if (currentSkillIndicator) {
-            currentSkillIndicator.innerHTML = `当前技能: <span>${skill.name}</span>`;
-        }
-
-        // 更新技能项状态
-        const skillItem = document.querySelector(`.skill-item[data-skill-id="${skill.id}"]`);
-        if (skillItem) {
-            skillItem.classList.add('active');
-        }
-
-        // 更新输入框提示
-        const messageInput = document.getElementById('messageInput');
-        messageInput.placeholder = `使用 ${skill.name} 技能，请输入内容...`;
-
-        // 关闭技能选择菜单
-        document.getElementById('skillSelectorMenu').classList.remove('show');
-
-        console.log('已选择技能:', skill.name);
-    }
-
-    // 加载聊天会话
-    async function loadChatSessions() {
-        try {
-            const response = await apiRequest('/chat/sessions');
-            if (response.success) {
-                chatSessions = {};
-                response.session.forEach(session => {
-                    chatSessions[session.id] = session;
-                });
-                // 设置当前聊天会话
-                if (response.session.length > 0) {
-                    currentChatId = response.session[0].id;
-                    await switchToChat(currentChatId);
-                } else {
-                    // 如果没有会话，创建一个新的
-                    await createNewChat();
-                }
-
-                updateChatHistoryList();
-                console.log('聊天会话加载成功');
-            } else {
-                throw new Error(response.message || '加载聊天会话失败');
-            }
-        } catch (error) {
-
-            console.error('加载聊天会话失败:', error);
-            // 创建默认会话作为后备
-            const defaultSession = {
-                id: 'session_1',
+            const chatId = `chat_${Date.now()}`;
+            const newChat = {
+                id: chatId,
                 title: '新对话',
-                updatedAt: new Date(),
-                messages: [],
-                currentSkillId: null
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                messages: [
+                    {
+                        id: Date.now(),
+                        type: 'received', // received=助手消息，sent=用户消息
+                        content: '您好！我是豆包智能助手，请选择一个技能开始使用～',
+                        timestamp: new Date().toISOString(),
+                        images: []
+                    }
+                ]
             };
-
-            chatSessions[defaultSession.id] = defaultSession;
-            currentChatId = defaultSession.id;
-
+            // 添加到会话列表
+            chatSessions[chatId] = newChat;
+            // 保存到本地存储
+            saveToLocalStorage();
+            // 切换到新会话
+            switchToChat(chatId);
+            // 更新聊天历史列表UI
             updateChatHistoryList();
-            showEmptyState();
-        }
-    }
-
-    // 创建新聊天
-    async function createNewChat() {
-        if (!checkAuth()) return null;
-
-        try {
-            const response = await apiRequest('/chat/sessions', {
-                method: 'POST',
-                body: JSON.stringify({ title: '新对话' })
-            });
-
-            if (response.success) {
-                const newSession = response.session;
-                chatSessions[newSession.id] = newSession;
-                currentChatId = newSession.id;
-
-                updateChatHistoryList();
-                showEmptyState();
-
-                return newSession.id;
-            } else {
-                throw new Error(response.message || '创建新聊天失败');
-            }
+            console.log('创建新对话成功：', chatId);
+            return chatId;
         } catch (error) {
             const status = parseInt(error.message.match(/status:\s*(\d+)/)?.[1] || 0);
             // console.error('创建新聊天失败:', error);
@@ -1776,262 +1565,174 @@
             }else {
                 alert('创建新聊天失败: ' + error.message);
             }
-
-
-            return null;
+            // console.error('创建新对话失败：', error);
+            // alert('创建新对话失败，请刷新页面重试');
         }
     }
 
-    // 显示空状态
-    function showEmptyState() {
-        const messagesContainer = document.getElementById('messagesContainer');
-        messagesContainer.innerHTML = `
-            <div class="empty-state" id="emptyState">
-                <i class="fas fa-comments"></i>
-                <p>开始与豆包对话吧！</p>
-                <div class="hint">选择一个技能，然后输入您的内容</div>
-            </div>
-        `;
-    }
-
-    // 更新聊天历史列表
-    function updateChatHistoryList() {
-        const chatHistory = document.getElementById('chatHistory');
-        chatHistory.innerHTML = '';
-
-        // 按更新时间倒序排序
-        const sortedChats = Object.values(chatSessions).sort((a, b) => {
-            return new Date(b.updatedAt) - new Date(a.updatedAt);
-        });
-
-        sortedChats.forEach(chat => {
-            const historyItem = document.createElement('div');
-            historyItem.className = `history-item ${chat.id === currentChatId ? 'active' : ''}`;
-            historyItem.dataset.chatId = chat.id;
-
-            // 获取最后一条消息作为预览
-            const lastMessage = chat.messages && chat.messages.length > 0 ?
-                chat.messages[chat.messages.length - 1] : null;
-            const previewText = lastMessage ?
-                (lastMessage.content && lastMessage.content.length > 20 ?
-                    lastMessage.content.substring(0, 20) + '...' : lastMessage.content) :
-                '新对话';
-
-            historyItem.innerHTML = `
-                <div class="history-icon">
-                    <i class="fas fa-comments"></i>
-                </div>
-                <div class="history-info">
-                    <div class="history-title">${chat.title}</div>
-                    <div class="history-preview">${previewText}</div>
-                </div>
-                <button class="delete-chat-btn" title="删除聊天">
-                    <i class="fas fa-times"></i>
-                </button>
-            `;
-
-            // 点击聊天项切换聊天
-            historyItem.addEventListener('click', (e) => {
-                if (!e.target.closest('.delete-chat-btn')) {
-                    switchToChat(chat.id);
-                }
-            });
-
-            // 删除聊天按钮
-            const deleteBtn = historyItem.querySelector('.delete-chat-btn');
-            deleteBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                deleteChat(chat.id);
-            });
-
-            chatHistory.appendChild(historyItem);
-        });
-    }
-
-    // 切换到指定聊天
-    async function switchToChat(chatId) {
-        if (!chatSessions[chatId]) {
-            console.error('聊天会话不存在:', chatId);
-            return;
-        }
-
+    /** 切换到指定聊天会话 */
+    function switchToChat(chatId) {
         try {
-            const response = await apiRequest(`/chat/sessions/${chatId}/messages`);
-
-            if (response.success) {
-                const chat = chatSessions[chatId];
-                chat.messages = response.session;
-                currentChatId = chat.id;
-
-                // 更新聊天标题
-                document.querySelector('.chat-name').textContent = chat.title;
-
-                // 清空消息容器
-                const messagesContainer = document.getElementById('messagesContainer');
-                messagesContainer.innerHTML = '';
-
-                // 添加消息到界面
-                if (chat.messages && chat.messages.length > 0) {
-                    chat.messages.forEach(message => {
-                        addMessageToUI(message);
-                    });
-                } else {
-                    // 显示空状态
-                    showEmptyState();
-                }
-
-                // 恢复当前会话的技能状态
-                if (chat.currentSkillId) {
-                    const skill = allSkills.find(s => s.id === chat.currentSkillId);
-                    if (skill) {
-                        selectSkill(skill);
-                    }
-                }
-
-                // 更新聊天历史列表的激活状态
-                updateChatHistoryList();
-
-                console.log('切换到聊天:', chatId);
-            } else {
-                throw new Error(response.message || '获取聊天消息失败');
+            if (!chatSessions[chatId]) {
+                console.error('切换聊天失败：会话不存在', chatId);
+                return;
             }
+            // 更新当前聊天ID
+            currentChatId = chatId;
+            const currentChat = chatSessions[chatId];
+            // 更新聊天标题UI
+            const chatNameEl = document.getElementById(CONFIG.CHAT_NAME);
+            if (chatNameEl) chatNameEl.textContent = currentChat.title;
+            // 清空消息容器并重新渲染所有消息
+            const messagesContainer = document.getElementById(CONFIG.MESSAGES_CONTAINER);
+            if (messagesContainer) messagesContainer.innerHTML = '';
+            currentChat.messages.forEach(message => addMessageToUI(message));
+            // 保存当前聊天ID到本地存储
+            saveToLocalStorage();
+            // 更新聊天历史列表UI
+            updateChatHistoryList();
+            // 滚动到最新消息
+            scrollToBottom();
+            console.log('切换到聊天会话：', chatId);
         } catch (error) {
-            console.error('切换聊天失败:', error);
-            alert('切换聊天失败: ' + error.message);
+            console.error('切换聊天失败：', error);
         }
     }
 
-    // 删除聊天
-    async function deleteChat(chatId) {
-        if (Object.keys(chatSessions).length <= 1) {
-            alert('至少需要保留一个聊天会话');
-            return;
-        }
-
+    /** 删除指定聊天会话 */
+    function deleteChat(chatId) {
         try {
-            const response = await apiRequest(`/chat/sessions/${chatId}`, {
-                method: 'DELETE'
-            });
-            if (response.success) {
-                delete chatSessions[chatId];
-
-                // 如果删除的是当前聊天，切换到另一个聊天
-                if (chatId === currentChatId) {
-                    const remainingChatIds = Object.keys(chatSessions);
-                    if (remainingChatIds.length > 0) {
-                        await switchToChat(remainingChatIds[0]);
-                    } else {
-                        await createNewChat();
-                    }
-                }
-
-                updateChatHistoryList();
-                console.log('删除聊天成功:', chatId);
-            } else {
-                throw new Error(response.message || '删除聊天失败');
+            // 至少保留一个会话
+            if (Object.keys(chatSessions).length <= 1) {
+                alert('至少需要保留一个聊天会话～');
+                return;
             }
+            // 删除会话
+            delete chatSessions[chatId];
+            console.log('删除聊天会话：', chatId);
+            // 如果删除的是当前会话，切换到第一个可用会话
+            if (chatId === currentChatId) {
+                const remainingChatIds = Object.keys(chatSessions);
+                switchToChat(remainingChatIds[0]);
+            }
+            // 保存到本地存储
+            saveToLocalStorage();
+            // 更新聊天历史列表UI
+            updateChatHistoryList();
         } catch (error) {
-            console.error('删除聊天失败:', error);
-            alert('删除聊天失败: ' + error.message);
+            console.error('删除聊天失败：', error);
+            alert('删除聊天失败，请刷新页面重试');
         }
     }
 
-    // 发送消息
-    // 发送消息
+    // ================= 消息发送与接收核心函数 =================
+    /** 发送消息（对接后端 + 本地存储） */
     async function sendMessage() {
-        if (!checkAuth()) return;
-
-        if (isProcessing) {
-            return; // 防止重复发送
-        }
-
-        const messageInput = document.getElementById('messageInput');
-        const text = messageInput.value.trim();
-        const sendButton = document.getElementById('sendButton');
-
-        // 检查是否已选择技能
-        if (!currentSkill) {
-            alert('请先选择一个技能！');
-            return;
-        }
-
-        if (text === '' && pendingImages.length === 0) {
-            return;
-        }
-
-        isProcessing = true;
-        sendButton.disabled = true;
-
         try {
-            // 显示处理中指示器
-            showProcessingIndicator();
-
-            // 准备请求数据
-            const requestData = {
-                sessionId: currentChatId,
+            // 1. 防重复发送
+            if (isProcessing) return;
+            // 2. 获取DOM元素
+            const messageInput = document.getElementById(CONFIG.MESSAGE_INPUT);
+            if (!messageInput) {
+                console.error('发送失败：未找到消息输入框');
+                return;
+            }
+            // 3. 收集输入内容（文本 + 图片）
+            const text = messageInput.value.trim();
+            const sendImages = [...pendingImages.map(img => img.dataUrl)]; // 复制图片数据，避免清空影响
+            // 4. 校验（必须选择技能 + 有内容/图片）
+            if (!currentSkill) {
+                alert('请先选择一个技能再发送消息～');
+                return;
+            }
+            if (text === '' && sendImages.length === 0) {
+                alert('请输入消息内容或上传图片～');
+                return;
+            }
+            // 5. 标记为处理中，防止重复发送
+            isProcessing = true;
+            // 6. 创建用户消息并更新UI
+            const userMessage = {
+                id: Date.now(),
+                type: 'sent',
                 content: text,
-                skillId: currentSkill.id,
-                imageUrls: pendingImages.map(img => img.data)
+                images: sendImages,
+                timestamp: new Date().toISOString()
             };
+            const currentChat = chatSessions[currentChatId];
+            currentChat.messages.push(userMessage);
+            currentChat.updatedAt = new Date().toISOString();
+            // 7. 首次发送消息时更新聊天标题
+            if (currentChat.messages.length === 2) {
+                currentChat.title = text.length > 15 ? text.substring(0, 15) + '...' : text;
+            }
+            // 8. 更新UI + 清空输入
 
-            // 发送消息到后端
-            const response = await apiRequest('/chat/send', {
+            messageInput.value = '';
+            clearPendingImages(); // 清空待发送图片
+            saveToLocalStorage(); // 保存到本地存储
+            scrollToBottom(); // 滚动到最新消息
+            console.log('发送用户消息：', userMessage);
+
+            // 9. 对接后端获取助手回复（核心）
+            isProcessing = true;
+            showLoadingIndicator(); // 显示加载中
+            // 10. 发送请求到后端
+            const response = await fetch('/api/chat/send', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${AUTH_TOKEN}` // 登录态Token（根据后端要求修改）
                 },
-                body: JSON.stringify(requestData)
+                body: JSON.stringify({
+                    chatId: currentChatId,
+                    message: text,
+                    skill: currentSkill,
+                    images: sendImages
+                }),
+                credentials: 'include' // 跨域时携带Cookie（如果后端用Cookie认证）
             });
-
-            // 修复：这里应该是 response.success 而不是 response.imageData
-            if (response.success) {
-                // 隐藏处理中指示器
-                hideProcessingIndicator();
-                // 清空输入框和图片
-                messageInput.value = '';
-                clearPendingImages();
-                // 创建用户消息对象
-                const userMessage = {
-                    id: 'user_msg_' + Date.now(),
-                    type: 'USER',
-                    content: text,
-                    timestamp: new Date().toISOString(),
-                    imageUrls: pendingImages.map(img => img.data)
-                };
-                // 添加用户消息到UI
-                addMessageToUI(userMessage);
-
-                // 添加AI回复到UI
-                addMessageToUI(response);
-                // addMessageToUI(response.data);
-
-                // 更新聊天会话
-                if (chatSessions[currentChatId]) {
-                    if (!chatSessions[currentChatId].messages) {
-                        chatSessions[currentChatId].messages = [];
-                    }
-
-                    chatSessions[currentChatId].messages.push(userMessage);
-                    chatSessions[currentChatId].messages.push(response.session);
-                    chatSessions[currentChatId].updatedAt = new Date().toISOString();
-                    chatSessions[currentChatId].currentSkillId = currentSkill.id;
-                }
-                updateChatHistoryList();
-                console.log('消息发送成功');
-            } else {
-                throw new Error(response.message || '发送消息失败');
+            // 11. 解析后端响应
+            const result = await response.json();
+            // 添加用户消息到UI
+            addMessageToUI(userMessage);
+            addMessageToUI(result);
+            if (!response.ok) {
+                throw new Error(result.message || `请求失败（状态码：${response.status}）`);
+            }
+            if (!result.success) {
+                throw new Error(result.message || '后端处理失败');
             }
 
-            isProcessing = false;
-            sendButton.disabled = false;
+
+            // 12. 创建助手回复并更新UI
+            const assistantMessage = {
+                id: Date.now() + 1,
+                type: 'received',
+                content: result.result || '暂无回复',
+                images: [],
+                timestamp: new Date().toISOString()
+            };
+            currentChat.messages.push(assistantMessage);
+            currentChat.updatedAt = new Date().toISOString();
+
+            saveToLocalStorage(); // 保存回复到本地存储
+            console.log('接收助手回复：', assistantMessage);
         } catch (error) {
-            console.error('发送消息失败:', error);
-            hideProcessingIndicator();
-            alert('发送消息失败: ' + error.message);
+            console.error('发送消息失败：', error);
+            showErrorMessage('发送失败：' + error.message);
+        } finally {
+            // 13. 重置状态
             isProcessing = false;
-            sendButton.disabled = false;
+            hideLoadingIndicator(); // 隐藏加载中
+            scrollToBottom(); // 滚动到最新消息
         }
     }
+    // 显示登录模态框
+    function showLoginModal() {
+        document.getElementById('loginModal').classList.add('active');
+    }
+
 
     // 显示处理中指示器
     function showProcessingIndicator() {
@@ -2073,6 +1774,20 @@
 
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
+    
+    /** 登录态校验（可根据实际登录逻辑修改） */
+    function checkAuth() {
+        // 这里简化为：有Token则认为已登录，无Token则提示登录（可根据项目扩展）
+        if (!AUTH_TOKEN) {
+            // 注释掉强制登录，先让功能跑通，后续可打开
+            // alert('请先登录再使用聊天功能～');
+            // console.warn('未检测到登录态Token，仍允许发送消息（可在checkAuth函数中修改登录逻辑）');
+            // return true; // 暂时返回true，方便测试，后续根据实际需求修改
+            showLoginModal();
+            return false;
+        }
+        return true;
+    }
 
     // 隐藏处理中指示器
     function hideProcessingIndicator() {
@@ -2081,9 +1796,65 @@
             processingIndicator.remove();
         }
     }
+    // ================= 图片处理函数 =================
+    /** 处理图片上传（暂存 + 预览） */
+    function handleImageUpload(files) {
+        try {
+            if (!files || files.length === 0) return;
+            Array.from(files).forEach(file => {
+                // 只允许图片文件
+                if (!file.type.startsWith('image/')) {
+                    alert('请上传图片格式的文件（JPG/PNG/GIF等）～');
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const dataUrl = e.target.result;
+                    // 暂存图片
+                    pendingImages.push({ file, dataUrl });
+                    // 显示图片预览
+                    showImagePreview(dataUrl);
+                    console.log('暂存上传图片：', file.name);
+                };
+                reader.readAsDataURL(file);
+            });
+        } catch (error) {
+            console.error('图片上传失败：', error);
+            alert('图片上传失败，请重试～');
+        }
+    }
 
-    // 添加消息到UI
-    // 添加消息到UI
+    /** 显示图片预览 */
+    function showImagePreview(dataUrl) {
+        const previewContainer = document.getElementById(CONFIG.IMAGE_PREVIEW_CONTAINER);
+        if (!previewContainer) return; // 没有预览容器则不显示
+        const previewEl = document.createElement('div');
+        previewEl.className = 'image-preview-item';
+        previewEl.innerHTML = `
+        <img src="${dataUrl}" alt="预览图片" style="max-width: 100px; max-height: 100px; margin: 0 5px 5px 0; border-radius: 4px;">
+        <button class="remove-preview-btn" style="position: relative; top: -20px; right: 10px; background: #ff4d4f; color: white; border: none; border-radius: 50%; width: 20px; height: 20px; cursor: pointer; font-size: 12px;">×</button>
+    `;
+        // 绑定删除预览图片事件
+        previewEl.querySelector('.remove-preview-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            previewEl.remove();
+            // 从pendingImages中移除对应的图片
+            pendingImages = pendingImages.filter(img => img.dataUrl !== dataUrl);
+            console.log('移除预览图片');
+        });
+        previewContainer.appendChild(previewEl);
+    }
+
+    /** 清空待发送图片 */
+    function clearPendingImages() {
+        pendingImages = [];
+        const previewContainer = document.getElementById(CONFIG.IMAGE_PREVIEW_CONTAINER);
+        if (previewContainer) previewContainer.innerHTML = '';
+        console.log('清空待发送图片');
+    }
+
+    // ================= UI渲染辅助函数 =================
+    /** 添加消息到界面 */
     function addMessageToUI(message) {
         const messagesContainer = document.getElementById('messagesContainer');
         const emptyState = document.getElementById('emptyState');
@@ -2190,7 +1961,20 @@
         const messageInput = document.getElementById('messageInput');
         messageInput.placeholder = '请先选择一个技能，然后输入内容';
     }
-
+    /** 显示加载中指示器 */
+    function showLoadingIndicator() {
+        const messagesContainer = document.getElementById(CONFIG.MESSAGES_CONTAINER);
+        if (!messagesContainer) return;
+        const loadingDiv = document.createElement('div');
+        loadingDiv.className = 'message message-received loading';
+        loadingDiv.id = 'loadingIndicator';
+        loadingDiv.innerHTML = `
+        <div class="message-content">
+            <i class="fas fa-spinner fa-spin"></i> 助手正在思考中...
+        </div>
+    `;
+        messagesContainer.appendChild(loadingDiv);
+    }
     // 显示VIP积分模态框
     async function showVipModal() {
         try {
@@ -2207,12 +1991,29 @@
 
         document.getElementById('vipModal').classList.add('active');
     }
+    /** 隐藏加载中指示器 */
+    function hideLoadingIndicator() {
+        const loadingDiv = document.getElementById('loadingIndicator');
+        if (loadingDiv) loadingDiv.remove();
+    }
 
     // 隐藏VIP积分模态框
     function hideVipModal() {
         document.getElementById('vipModal').classList.remove('active');
     }
-
+    /** 显示错误消息 */
+    function showErrorMessage(text) {
+        const messagesContainer = document.getElementById(CONFIG.MESSAGES_CONTAINER);
+        if (!messagesContainer) return;
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'message message-received error';
+        errorDiv.innerHTML = `
+        <div class="message-content">
+            <i class="fas fa-exclamation-circle"></i> ${escapeHtml(text)}
+        </div>
+    `;
+        messagesContainer.appendChild(errorDiv);
+    }
     // 处理退出登录
     function handleLogout() {
         if (confirm('确定要退出登录吗？')) {
@@ -2232,22 +2033,185 @@
             // alert('已成功退出登录');
         }
     }
-
-
-    // 直接退出登录
-    function loginout() {
-            // 清除登录状态
-            isLoggedIn = false;
-            currentUser = null;
-            localStorage.removeItem('currentUser');
-            localStorage.removeItem('token');
-            // 重置界面状态
-            updateUserInterface();
-            resetCurrentSkill();
-            // 隐藏用户下拉菜单
-            document.getElementById('userDropdown').classList.remove('active');
+    /** 更新聊天历史列表UI */
+    function updateChatHistoryList() {
+        try {
+            const chatHistoryEl = document.getElementById(CONFIG.CHAT_HISTORY);
+            if (!chatHistoryEl) {
+                console.error('更新聊天列表失败：未找到聊天历史容器');
+                return;
+            }
+            // 清空列表
+            chatHistoryEl.innerHTML = '';
+            // 按更新时间倒序排序（最新的在前面）
+            const sortedChats = Object.values(chatSessions).sort((a, b) => {
+                return new Date(b.updatedAt) - new Date(a.updatedAt);
+            });
+            // 渲染每个聊天项
+            sortedChats.forEach(chat => {
+                const historyItem = document.createElement('div');
+                historyItem.className = `history-item ${chat.id === currentChatId ? 'active' : ''}`;
+                historyItem.dataset.chatId = chat.id;
+                // 最后一条消息预览
+                const lastMessage = chat.messages[chat.messages.length - 1];
+                const previewText = lastMessage.content.length > 20 ? lastMessage.content.substring(0, 20) + '...' : lastMessage.content;
+                // 聊天项HTML
+                historyItem.innerHTML = `
+                <div class="history-icon" style="margin-right: 8px;">
+                    <i class="fas fa-comments"></i>
+                </div>
+                <div class="history-info" style="flex: 1;">
+                    <div class="history-title" style="font-weight: 500; margin-bottom: 2px;">${chat.title}</div>
+                    <div class="history-preview" style="font-size: 12px; color: #999;">${previewText}</div>
+                </div>
+                <button class="delete-chat-btn" title="删除聊天" style="background: transparent; border: none; color: #999; cursor: pointer; margin-left: 8px;">
+                    <i class="fas fa-times"></i>
+                </button>
+            `;
+                // 绑定切换聊天事件
+                historyItem.addEventListener('click', (e) => {
+                    if (!e.target.closest('.delete-chat-btn')) {
+                        switchToChat(chat.id);
+                    }
+                });
+                // 绑定删除聊天事件
+                const deleteBtn = historyItem.querySelector('.delete-chat-btn');
+                deleteBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    if (confirm('确定要删除这个聊天会话吗？')) {
+                        deleteChat(chat.id);
+                    }
+                });
+                // 添加到列表
+                chatHistoryEl.appendChild(historyItem);
+            });
+        } catch (error) {
+            console.error('更新聊天列表失败：', error);
+        }
     }
 
+    /** 滚动到最新消息 */
+    function scrollToBottom() {
+        const messagesContainer = document.getElementById(CONFIG.MESSAGES_CONTAINER);
+        if (messagesContainer) {
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+    }
+
+    // ================= 工具函数 =================
+    /** 格式化时间戳（例：2025-11-21 14:30:25） */
+    function formatTimestamp(timestamp) {
+        const date = new Date(timestamp);
+        return date.toLocaleString('zh-CN', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        });
+    }
+    // 直接退出登录
+    function loginout() {
+        // 清除登录状态
+        isLoggedIn = false;
+        currentUser = null;
+        localStorage.removeItem('currentUser');
+        localStorage.removeItem('token');
+        // 重置界面状态
+        updateUserInterface();
+        resetCurrentSkill();
+        // 隐藏用户下拉菜单
+        document.getElementById('userDropdown').classList.remove('active');
+    }
+    /** 防XSS攻击：转义HTML特殊字符 */
+    function escapeHtml(unsafe) {
+        if (!unsafe) return '';
+        return unsafe
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
+    // ================= 事件绑定（核心！确保所有交互生效）=================
+    function bindAllEvents() {
+        console.log('开始绑定交互事件...');
+        // 1. 发送按钮点击事件
+        const sendBtn = document.getElementById(CONFIG.SEND_BTN);
+        if (sendBtn) {
+            sendBtn.addEventListener('click', sendMessage);
+            console.log('绑定发送按钮事件成功');
+        } else {
+            console.warn('未找到发送按钮，发送功能不可用（请检查ID：', CONFIG.SEND_BTN, '）');
+        }
+
+        // 2. 回车发送事件（不按shift时）
+        const messageInput = document.getElementById(CONFIG.MESSAGE_INPUT);
+        if (messageInput) {
+            messageInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                }
+            });
+            console.log('绑定回车发送事件成功');
+        } else {
+            console.warn('未找到消息输入框，输入功能不可用（请检查ID：', CONFIG.MESSAGE_INPUT, '）');
+        }
+
+        // 3. 图片上传事件
+        const imageUpload = document.getElementById(CONFIG.IMAGE_UPLOAD);
+        if (imageUpload) {
+            imageUpload.addEventListener('change', (e) => handleImageUpload(e.target.files));
+            console.log('绑定图片上传事件成功');
+        } else {
+            console.warn('未找到图片上传框，图片上传功能不可用（请检查ID：', CONFIG.IMAGE_UPLOAD, '）');
+        }
+
+        // 4. 技能选择事件（根据class绑定）
+        const skillItems = document.querySelectorAll(`.${CONFIG.SKILL_ITEM_CLASS}`);
+        if (skillItems.length > 0) {
+            skillItems.forEach(item => {
+                item.addEventListener('click', () => {
+                    // 移除其他技能的active类
+                    skillItems.forEach(i => i.classList.remove('active'));
+                    // 给当前选中的技能添加active类
+                    item.classList.add('active');
+                    // 获取技能值（从data-skill属性）
+                    currentSkill = item.dataset.skill;
+                    console.log('选中技能：', currentSkill);
+                    alert(`已选择技能：${item.textContent.trim()}`);
+                });
+            });
+            console.log('绑定技能选择事件成功（共', skillItems.length, '个技能）');
+        } else {
+            console.warn('未找到技能选择项，技能选择功能不可用（请检查class：', CONFIG.SKILL_ITEM_CLASS, '）');
+        }
+
+        // 5. 新建聊天按钮事件
+        const newChatBtn = document.getElementById(CONFIG.NEW_CHAT_BTN);
+        if (newChatBtn) {
+            newChatBtn.addEventListener('click', createNewChat);
+            console.log('绑定新建聊天按钮事件成功');
+        } else {
+            console.warn('未找到新建聊天按钮，新建功能不可用（请检查ID：', CONFIG.NEW_CHAT_BTN, '）');
+        }
+
+        console.log('事件绑定完成');
+    }
+    // 处理图片选择
+    function handleImageSelect(e) {
+        const files = e.target.files;
+        if (files.length > 0) {
+            handleFileSelect(files);
+        }
+    }
+    // 隐藏登录模态框
+    function hideLoginModal() {
+        document.getElementById('loginModal').classList.remove('active');
+    }
 
     // 绑定事件
     function bindEvents() {
@@ -2389,6 +2353,14 @@
         // 初始化拖拽功能
         initDragAndDrop();
     }
+    // 检查登录状态
+    function checkAuth() {
+        if (!isLoggedIn) {
+            showLoginModal();
+            return false;
+        }
+        return true;
+    }
 
     // 初始化拖拽功能
     function initDragAndDrop() {
@@ -2433,260 +2405,51 @@
         messagesContainer.addEventListener('dragleave', handleDragLeave);
         messagesContainer.addEventListener('drop', handleDrop);
     }
+    // 处理注册
+    async function handleRegister() {
+        const username = document.getElementById('registerUsername').value.trim();
+        const email = document.getElementById('registerEmail').value.trim();
+        const password = document.getElementById('registerPassword').value.trim();
+        const confirmPassword = document.getElementById('confirmPassword').value.trim();
 
-    // 处理图片选择
-    function handleImageSelect(e) {
-        const files = e.target.files;
-        if (files.length > 0) {
-            handleFileSelect(files);
+        if (!username || !email || !password || !confirmPassword) {
+            alert('请填写所有字段');
+            return;
         }
-    }
 
-    // 处理文件选择
-    function handleFileSelect(files) {
-        for (let file of files) {
-            // 检查文件类型
-            if (!file.type.startsWith('image/')) {
-                alert('请选择图片文件！');
-                continue;
-            }
-
-            // 检查文件大小（限制为2MB）
-            if (file.size > 2 * 1024 * 1024) {
-                alert(`图片 ${file.name} 太大，请选择小于2MB的图片`);
-                continue;
-            }
-
-            // 检查总图片数量限制
-            if (pendingImages.length >= 5) {
-                alert('最多只能上传5张图片');
-                break;
-            }
-
-            addPendingImage(file);
+        if (password !== confirmPassword) {
+            alert('两次输入的密码不一致');
+            return;
         }
-    }
 
-    // 补全 bindEvents 函数
-    function bindEvents() {
-        // 关闭登录按钮
-        document.getElementById('closeLoginBtn').addEventListener('click', hideLoginModal);
+        if (password.length < 6) {
+            alert('密码长度至少6位');
+            return;
+        }
 
-        // 用户头像点击事件
-        document.getElementById('userProfile').addEventListener('click', (e) => {
-            if (!isLoggedIn) {
-                showLoginModal();
+        try {
+            const response = await apiRequest('/auth/register', {
+                method: 'POST',
+                body: JSON.stringify({ username, email, password,confirmPassword})
+            });
+
+            if (response.success) {
+                alert('注册成功！请登录');
+                // 切换到登录标签
+                document.querySelector('.login-tab[data-tab="login"]').click();
+                // 清空注册表单
+                document.getElementById('registerUsername').value = '';
+                document.getElementById('registerEmail').value = '';
+                document.getElementById('registerPassword').value = '';
+                document.getElementById('confirmPassword').value = '';
             } else {
-                // 切换下拉菜单显示/隐藏
-                const dropdown = document.getElementById('userDropdown');
-                dropdown.classList.toggle('active');
+                alert(response.message || '注册失败');
             }
-        });
-
-        // 点击页面其他区域关闭下拉菜单
-        document.addEventListener('click', (e) => {
-            if (!e.target.closest('.user-profile')) {
-                document.getElementById('userDropdown').classList.remove('active');
-            }
-        });
-
-        // VIP积分按钮点击事件
-        document.getElementById('vipOption').addEventListener('click', () => {
-            document.getElementById('userDropdown').classList.remove('active');
-            showVipModal();
-        });
-
-        // 退出登录按钮点击事件
-        document.getElementById('logoutOption').addEventListener('click', () => {
-            document.getElementById('userDropdown').classList.remove('active');
-            handleLogout();
-        });
-
-        // 关闭VIP模态框按钮
-        document.getElementById('closeVipBtn').addEventListener('click', hideVipModal);
-
-        // 登录相关事件
-        document.getElementById('loginBtn').addEventListener('click', handleLogin);
-        document.getElementById('registerBtn').addEventListener('click', handleRegister);
-        document.getElementById('qqLoginBtn').addEventListener('click', handleQQLogin);
-        document.getElementById('wechatLoginBtn').addEventListener('click', handleWechatLogin);
-
-        // 登录/注册切换
-        document.getElementById('goToRegister').addEventListener('click', (e) => {
-            e.preventDefault();
-            // 切换到注册标签
-            document.querySelectorAll('.login-tab').forEach(tab => {
-                tab.classList.remove('active');
-                if (tab.dataset.tab === 'register') {
-                    tab.classList.add('active');
-                }
-            });
-            document.querySelectorAll('.login-form').forEach(form => {
-                form.classList.remove('active');
-                if (form.id === 'registerForm') {
-                    form.classList.add('active');
-                }
-            });
-        });
-
-        document.getElementById('goToLogin').addEventListener('click', (e) => {
-            e.preventDefault();
-            // 切换到登录标签
-            document.querySelectorAll('.login-tab').forEach(tab => {
-                tab.classList.remove('active');
-                if (tab.dataset.tab === 'login') {
-                    tab.classList.add('active');
-                }
-            });
-            document.querySelectorAll('.login-form').forEach(form => {
-                form.classList.remove('active');
-                if (form.id === 'loginForm') {
-                    form.classList.add('active');
-                }
-            });
-        });
-
-        // 登录标签切换
-        document.querySelectorAll('.login-tab').forEach(tab => {
-            tab.addEventListener('click', function() {
-                const tabName = this.getAttribute('data-tab');
-
-                // 更新标签状态
-                document.querySelectorAll('.login-tab').forEach(t => t.classList.remove('active'));
-                this.classList.add('active');
-
-                // 更新表单显示
-                document.querySelectorAll('.login-form').forEach(form => form.classList.remove('active'));
-                document.getElementById(`${tabName}Form`).classList.add('active');
-            });
-        });
-
-        // 新建聊天按钮
-        document.getElementById('newChatBtn').addEventListener('click', createNewChat);
-
-        // 发送按钮
-        document.getElementById('sendButton').addEventListener('click', sendMessage);
-
-        // 上传图片按钮
-        document.getElementById('uploadImageButton').addEventListener('click', () => {
-            if (!checkAuth()) return;
-            document.getElementById('imageInput').click();
-        });
-
-        // 消息输入框回车发送
-        document.getElementById('messageInput').addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-            }
-        });
-
-        // 图片选择
-        document.getElementById('imageInput').addEventListener('change', handleImageSelect);
-
-        // 技能选择器
-        const skillSelectorBtn = document.getElementById('skillSelectorBtn');
-        const skillSelectorMenu = document.getElementById('skillSelectorMenu');
-
-        skillSelectorBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (!checkAuth()) return;
-            skillSelectorMenu.classList.toggle('show');
-        });
-
-        // 点击页面其他区域关闭菜单
-        document.addEventListener('click', () => {
-            skillSelectorMenu.classList.remove('show');
-        });
-
-        // 阻止菜单内部点击事件冒泡
-        skillSelectorMenu.addEventListener('click', (e) => {
-            e.stopPropagation();
-        });
-
-        // 图片预览模态框点击关闭
-        const imagePreviewModal = document.getElementById('imagePreviewModal');
-        if (imagePreviewModal) {
-            imagePreviewModal.addEventListener('click', function() {
-                this.classList.remove('active');
-            });
-        }
-
-        // VIP模态框点击关闭
-        const vipModal = document.getElementById('vipModal');
-        if (vipModal) {
-            vipModal.addEventListener('click', function(e) {
-                if (e.target === this) {
-                    this.classList.remove('active');
-                }
-            });
-        }
-
-        // VIP功能按钮
-        document.getElementById('rechargeBtn').addEventListener('click', function() {
-            alert('充值功能需要后端支持，当前为演示模式');
-        });
-
-        document.getElementById('vipHistoryBtn').addEventListener('click', function() {
-            alert('积分记录功能需要后端支持，当前为演示模式');
-        });
-
-        // 初始化拖拽功能
-        initDragAndDrop();
-    }
-
-    // 初始化拖拽功能
-    function initDragAndDrop() {
-        const chatApp = document.querySelector('.chat-app');
-        const messagesContainer = document.getElementById('messagesContainer');
-
-        // 阻止默认拖拽行为
-        const preventDefault = (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-        };
-
-        // 拖拽进入
-        const handleDragEnter = (e) => {
-            preventDefault(e);
-        };
-
-        // 拖拽离开
-        const handleDragLeave = (e) => {
-            preventDefault(e);
-        };
-
-        // 放置文件
-        const handleDrop = (e) => {
-            preventDefault(e);
-
-            const files = e.dataTransfer.files;
-            if (files.length > 0) {
-                handleFileSelect(files);
-            }
-        };
-
-        // 为整个聊天应用添加拖拽事件
-        chatApp.addEventListener('dragenter', handleDragEnter);
-        chatApp.addEventListener('dragover', preventDefault);
-        chatApp.addEventListener('dragleave', handleDragLeave);
-        chatApp.addEventListener('drop', handleDrop);
-
-        // 为消息容器单独添加拖拽事件
-        messagesContainer.addEventListener('dragenter', handleDragEnter);
-        messagesContainer.addEventListener('dragover', preventDefault);
-        messagesContainer.addEventListener('dragleave', handleDragLeave);
-        messagesContainer.addEventListener('drop', handleDrop);
-    }
-
-    // 处理图片选择
-    function handleImageSelect(e) {
-        const files = e.target.files;
-        if (files.length > 0) {
-            handleFileSelect(files);
+        } catch (error) {
+            console.error('注册失败:', error);
+            alert('注册失败，请检查网络连接或稍后重试');
         }
     }
-
     // 处理文件选择
     function handleFileSelect(files) {
         for (let file of files) {
@@ -2711,7 +2474,11 @@
             addPendingImage(file);
         }
     }
-
+    // 处理QQ登录
+    function handleQQLogin() {
+        alert('QQ登录功能需要后端支持，当前为演示模式');
+        // 在实际应用中，这里应该重定向到QQ OAuth授权页面
+    }
     // 添加图片到待发送列表
     function addPendingImage(file) {
         const reader = new FileReader();
@@ -2736,7 +2503,11 @@
 
         reader.readAsDataURL(file);
     }
-
+    // 处理微信登录
+    function handleWechatLogin() {
+        alert('微信登录功能需要后端支持，当前为演示模式');
+        // 在实际应用中，这里应该显示微信二维码
+    }
     // 更新图片缩略图显示
     function updateImageThumbnails() {
         const inputActions = document.getElementById('inputActions');
@@ -2754,7 +2525,6 @@
             inputActions.appendChild(thumbnail);
         });
     }
-
     // 创建图片缩略图
     function createImageThumbnail(image, index) {
         const thumbnail = document.createElement('div');
@@ -2782,7 +2552,11 @@
 
         return thumbnail;
     }
-
+    // 移除待发送图片
+    function removePendingImage(imageId) {
+        pendingImages = pendingImages.filter(img => img.id !== imageId);
+        updateImageThumbnails();
+    }
     // 预览图片
     function previewImage(imageSrc) {
         const modal = document.getElementById('imagePreviewModal');
@@ -2800,76 +2574,53 @@
             };
         }
     }
+    // 加载技能列表
+    async function loadSkills() {
+        try {
+            const response = await apiRequest('/skills');
 
-
-    // 移除待发送图片
-    function removePendingImage(imageId) {
-        pendingImages = pendingImages.filter(img => img.id !== imageId);
-        updateImageThumbnails();
+            if (response.success) {
+                allSkills = response.data;
+                renderSkills();
+                console.log('技能列表加载成功');
+            } else {
+                throw new Error(response.message || '加载技能列表失败');
+            }
+        } catch (error) {
+            console.error('加载技能列表失败:', error);
+            // 使用默认技能作为后备
+            allSkills = getDefaultSkills();
+            renderSkills();
+        }
     }
 
-    // 清空所有待发送图片
-    function clearPendingImages() {
-        pendingImages = [];
-        updateImageThumbnails();
+    // 获取默认技能（后备方案）
+    function getDefaultSkills() {
+        return [
+            { id: 'skill_1', name: '文本摘要', command: '/summarize', category: 'TEXT' },
+            { id: 'skill_2', name: '英文翻译', command: '/translate_en', category: 'TEXT' },
+            { id: 'skill_3', name: '中文翻译', command: '/translate_zh', category: 'TEXT' },
+            { id: 'skill_4', name: '语法检查', command: '/grammar_check', category: 'TEXT' },
+            { id: 'skill_5', name: '情感分析', command: '/sentiment_analysis', category: 'TEXT' },
+            { id: 'skill_6', name: '关键词提取', command: '/extract_keywords', category: 'TEXT' },
+            { id: 'skill_7', name: '文本分类', command: '/text_classification', category: 'TEXT' },
+            { id: 'skill_8', name: '命名实体识别', command: '/ner', category: 'TEXT' },
+            { id: 'skill_9', name: '文本纠错', command: '/text_correction', category: 'TEXT' },
+            { id: 'skill_10', name: '文本生成', command: '/text_generation', category: 'TEXT' },
+            { id: 'skill_11', name: '代码解释', command: '/explain_code', category: 'CODE' },
+            { id: 'skill_12', name: '代码生成', command: '/generate_code', category: 'CODE' },
+            { id: 'skill_13', name: '代码优化', command: '/optimize_code', category: 'CODE' },
+            { id: 'skill_14', name: '代码调试', command: '/debug_code', category: 'CODE' },
+            { id: 'skill_15', name: '问答系统', command: '/qa', category: 'ADVANCED' },
+            { id: 'skill_16', name: '文本相似度', command: '/text_similarity', category: 'ADVANCED' },
+            { id: 'skill_17', name: '文本聚类', command: '/text_clustering', category: 'ADVANCED' },
+            { id: 'skill_18', name: '文本去重', command: '/deduplicate', category: 'ADVANCED' },
+            { id: 'skill_19', name: '文本格式化', command: '/format_text', category: 'ADVANCED' },
+            { id: 'skill_20', name: '文本加密', command: '/encrypt_text', category: 'ADVANCED' }
+        ];
     }
 
-    // 预览图片
-
-    function updateChatHistoryList() {
-        const chatHistory = document.getElementById('chatHistory');
-        chatHistory.innerHTML = '';
-
-        // 按更新时间倒序排序
-        const sortedChats = Object.values(chatSessions).sort((a, b) => {
-            return new Date(b.updatedAt) - new Date(a.updatedAt);
-        });
-
-        sortedChats.forEach(chat => {
-            const historyItem = document.createElement('div');
-            historyItem.className = `history-item ${chat.id === currentChatId ? 'active' : ''}`;
-            historyItem.dataset.chatId = chat.id;
-
-            // 获取最后一条消息作为预览
-            const lastMessage = chat.messages && chat.messages.length > 0 ?
-                chat.messages[chat.messages.length - 1] : null;
-            const previewText = lastMessage ?
-                (lastMessage.content && lastMessage.content.length > 20 ?
-                    lastMessage.content.substring(0, 20) + '...' : lastMessage.content) :
-                '新对话';
-
-            historyItem.innerHTML = `
-                <div class="history-icon">
-                    <i class="fas fa-comments"></i>
-                </div>
-                <div class="history-info">
-                    <div class="history-title">${chat.title}</div>
-                    <div class="history-preview">${previewText}</div>
-                </div>
-                <button class="delete-chat-btn" title="删除聊天">
-                    <i class="fas fa-times"></i>
-                </button>
-            `;
-
-            // 点击聊天项切换聊天
-            historyItem.addEventListener('click', (e) => {
-                if (!e.target.closest('.delete-chat-btn')) {
-                    switchToChat(chat.id);
-                }
-            });
-
-            // 删除聊天按钮
-            const deleteBtn = historyItem.querySelector('.delete-chat-btn');
-            deleteBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                deleteChat(chat.id);
-            });
-
-            chatHistory.appendChild(historyItem);
-        });
-    }
-
-    // 补全其他缺失的函数
+    // 渲染技能列表
     function renderSkills() {
         const textSkillsContainer = document.getElementById('textSkills');
         const codeSkillsContainer = document.getElementById('codeSkills');
@@ -2900,6 +2651,7 @@
         });
     }
 
+    // 创建技能项
     function createSkillItem(skill) {
         const skillItem = document.createElement('div');
         skillItem.className = 'skill-item';
@@ -2915,7 +2667,64 @@
         return skillItem;
     }
 
+    // 选择技能
+    function selectSkill(skill) {
+        // 移除之前选中的技能
+        if (currentSkill) {
+            const previousSkillItem = document.querySelector(`.skill-item[data-skill-id="${currentSkill.id}"]`);
+            if (previousSkillItem) {
+                previousSkillItem.classList.remove('active');
+            }
+        }
+
+        // 设置当前技能
+        currentSkill = skill;
+
+        // 更新技能选择器按钮状态
+        const skillSelectorBtn = document.getElementById('skillSelectorBtn');
+        const currentSkillIndicator = document.getElementById('currentSkillIndicator');
+
+        skillSelectorBtn.classList.add('active');
+        if (currentSkillIndicator) {
+            currentSkillIndicator.innerHTML = `当前技能: <span>${skill.name}</span>`;
+        }
+
+        // 更新技能项状态
+        const skillItem = document.querySelector(`.skill-item[data-skill-id="${skill.id}"]`);
+        if (skillItem) {
+            skillItem.classList.add('active');
+        }
+
+        // 更新输入框提示
+        const messageInput = document.getElementById('messageInput');
+        messageInput.placeholder = `使用 ${skill.name} 技能，请输入内容...`;
+
+        // 关闭技能选择菜单
+        document.getElementById('skillSelectorMenu').classList.remove('show');
+
+        console.log('已选择技能:', skill.name);
+    }
+
+
+    // ================= 页面加载完成后初始化 =================
+    document.addEventListener('DOMContentLoaded', function() {
+        console.log('初始化聊天系统...');
+
+
+        loadSkills();
+        // 1. 加载本地存储的聊天记录
+        loadFromLocalStorage();
+        // 2. 初始化聊天会话（无会话则创建新的）
+        initChatSessions();
+        // 3. 绑定所有交互事件（核心！确保按钮/输入框能响应）
+        bindAllEvents();
+        // 4. 控制台提示（方便调试）
+        bindEvents();
+        console.log('初始化完成，当前聊天会话：', chatSessions);
+    });
+
 </script>
+
 </body>
 </html>
 
