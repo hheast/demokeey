@@ -529,9 +529,13 @@
         .received .message-avatar {
             background: linear-gradient(135deg, #667eea, #764ba2);
             color: white;
+            order: 1; /* 服务器消息头像在左侧 */
+            margin-right: 15px;
         }
 
         .sent .message-avatar {
+            order: 2; /* 用户消息头像在右侧 */
+            margin-left: 15px;
             background: #e2e8f0;
             color: #718096;
         }
@@ -1376,7 +1380,7 @@
     let isLoggedIn = false;
     let currentUser = null;
     let vipPoints = 1250; // 初始VIP积分
-    
+
     // 登录态Token（根据项目实际登录逻辑修改，这里先留空，后续可扩展）
     let AUTH_TOKEN = localStorage.getItem('auth_token') || document.cookie.split('; ').find(row => row.startsWith('auth_token='))?.split('=')[1] || '';
 
@@ -1447,23 +1451,94 @@
         }
     }
 
-    // 更新用户界面状态
+    /**
+     * 更新技能选择器的可用状态
+     */
+    function updateSkillSelectorState() {
+        const skillSelectorBtn = document.getElementById('skillSelectorBtn');
+        const skillItems = document.querySelectorAll('.skill-item');
+
+        if (isLoggedIn) {
+            // 已登录，启用技能选择
+            if (skillSelectorBtn) {
+                skillSelectorBtn.disabled = false;
+                skillSelectorBtn.style.opacity = '1';
+                skillSelectorBtn.style.cursor = 'pointer';
+            }
+
+            skillItems.forEach(item => {
+                item.style.pointerEvents = 'auto';
+                item.style.opacity = '1';
+            });
+        } else {
+            // 未登录，禁用技能选择
+            if (skillSelectorBtn) {
+                skillSelectorBtn.disabled = true;
+                skillSelectorBtn.style.opacity = '0.5';
+                skillSelectorBtn.style.cursor = 'not-allowed';
+            }
+
+            skillItems.forEach(item => {
+                item.style.pointerEvents = 'none';
+                item.style.opacity = '0.5';
+            });
+
+            // 重置当前技能
+            resetCurrentSkill();
+        }
+    }
+
+    function saveLoginStateToStorage() {
+        try {
+            if (isLoggedIn && currentUser && AUTH_TOKEN) {
+                localStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, AUTH_TOKEN);
+                localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(currentUser));
+                console.log('登录状态已保存到本地存储');
+            } else {
+                // 如果未登录，清除存储的登录状态
+                clearLoginStateFromStorage();
+            }
+        } catch (error) {
+            console.error('保存登录状态到本地存储失败:', error);
+        }
+    }
+
+    // ================= 用户界面更新函数 =================
+
+    /**
+     * 更新用户界面状态
+     */
     function updateUserInterface() {
         const userNameElement = document.getElementById('userName');
         const userStatusElement = document.getElementById('userStatus');
         const messageInput = document.getElementById('messageInput');
+        const loginModal = document.getElementById('loginModal');
 
         if (isLoggedIn && currentUser) {
-            userNameElement.textContent = currentUser.username;
+            userNameElement.textContent = currentUser.username || '用户';
             userStatusElement.textContent = 'VIP会员';
-            messageInput.placeholder = '请先选择一个技能，然后输入内容';
+            if (messageInput) {
+                messageInput.placeholder = '请先选择一个技能，然后输入内容';
+            }
+
+            // 确保登录模态框隐藏
+            if (loginModal) {
+                loginModal.classList.remove('active');
+            }
         } else {
             userNameElement.textContent = '未登录';
             userStatusElement.textContent = '点击登录';
-            messageInput.placeholder = '请先登录并选择技能';
+            if (messageInput) {
+                messageInput.placeholder = '请先登录并选择技能';
+            }
         }
+
+        // 更新技能选择器的可用状态
+        updateSkillSelectorState();
     }
-    // 处理登录
+    /**
+     * 处理登录
+     */
     async function handleLogin() {
         const username = document.getElementById('loginUsername').value.trim();
         const password = document.getElementById('loginPassword').value.trim();
@@ -1474,23 +1549,31 @@
         }
 
         try {
+            // 模拟登录API请求
             const response = await apiRequest('/auth/login', {
                 method: 'POST',
                 body: JSON.stringify({ username, password })
             });
+            alert(response.success)
             if (response.success) {
+                // 登录成功
 
                 isLoggedIn = true;
-                currentUser = response.user;
-                // 保存token和用户信息到本地存储
-                localStorage.setItem('token', response.token);
-                localStorage.setItem('currentUser', JSON.stringify(currentUser));
+                currentUser = response.user || { username: username };
+                AUTH_TOKEN = response.token || `token_${Date.now()}`;
+
+                // 保存登录状态到本地存储
+                saveLoginStateToStorage();
 
                 // 更新界面
                 updateUserInterface();
                 hideLoginModal();
 
-                alert('登录成功！');
+                // 清空登录表单
+                document.getElementById('loginUsername').value = '';
+                document.getElementById('loginPassword').value = '';
+
+                console.log('登录成功');
             } else {
                 alert(response.message || '登录失败');
             }
@@ -1560,7 +1643,7 @@
             // console.error('创建新聊天失败:', error);
             // alert('创建新聊天失败: ' + error.message);
             if (status === 400 || status === 401) {
-                loginout()
+                // loginout()
                 checkAuth()
             }else {
                 alert('创建新聊天失败: ' + error.message);
@@ -1628,6 +1711,7 @@
     // ================= 消息发送与接收核心函数 =================
     /** 发送消息（对接后端 + 本地存储） */
     async function sendMessage() {
+        if (!checkAuth()) return;
         try {
             // 1. 防重复发送
             if (isProcessing) return;
@@ -1656,7 +1740,7 @@
                 id: Date.now(),
                 type: 'sent',
                 content: text,
-                images: sendImages,
+                images:  pendingImages,
                 timestamp: new Date().toISOString()
             };
             const currentChat = chatSessions[currentChatId];
@@ -1668,11 +1752,7 @@
             }
             // 8. 更新UI + 清空输入
 
-            messageInput.value = '';
-            clearPendingImages(); // 清空待发送图片
-            saveToLocalStorage(); // 保存到本地存储
-            scrollToBottom(); // 滚动到最新消息
-            console.log('发送用户消息：', userMessage);
+
 
             // 9. 对接后端获取助手回复（核心）
             isProcessing = true;
@@ -1688,10 +1768,17 @@
                     chatId: currentChatId,
                     message: text,
                     skill: currentSkill,
-                    images: sendImages
+                    images: pendingImages,
                 }),
                 credentials: 'include' // 跨域时携带Cookie（如果后端用Cookie认证）
             });
+
+            messageInput.value = '';
+            clearPendingImages(); // 清空待发送图片
+            saveToLocalStorage(); // 保存到本地存储
+            scrollToBottom(); // 滚动到最新消息
+            console.log('发送用户消息：', userMessage);
+
             // 11. 解析后端响应
             const result = await response.json();
             // 添加用户消息到UI
@@ -1728,9 +1815,14 @@
             scrollToBottom(); // 滚动到最新消息
         }
     }
-    // 显示登录模态框
+    /**
+     * 显示登录模态框
+     */
     function showLoginModal() {
-        document.getElementById('loginModal').classList.add('active');
+        const loginModal = document.getElementById('loginModal');
+        if (loginModal) {
+            loginModal.classList.add('active');
+        }
     }
 
 
@@ -1773,20 +1865,6 @@
         messagesContainer.appendChild(processingDiv);
 
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    }
-    
-    /** 登录态校验（可根据实际登录逻辑修改） */
-    function checkAuth() {
-        // 这里简化为：有Token则认为已登录，无Token则提示登录（可根据项目扩展）
-        if (!AUTH_TOKEN) {
-            // 注释掉强制登录，先让功能跑通，后续可打开
-            // alert('请先登录再使用聊天功能～');
-            // console.warn('未检测到登录态Token，仍允许发送消息（可在checkAuth函数中修改登录逻辑）');
-            // return true; // 暂时返回true，方便测试，后续根据实际需求修改
-            showLoginModal();
-            return false;
-        }
-        return true;
     }
 
     // 隐藏处理中指示器
@@ -1848,9 +1926,7 @@
     /** 清空待发送图片 */
     function clearPendingImages() {
         pendingImages = [];
-        const previewContainer = document.getElementById(CONFIG.IMAGE_PREVIEW_CONTAINER);
-        if (previewContainer) previewContainer.innerHTML = '';
-        console.log('清空待发送图片');
+        updateImageThumbnails();
     }
 
     // ================= UI渲染辅助函数 =================
@@ -1863,7 +1939,10 @@
             emptyState.remove();
         }
         const messageDiv = document.createElement('div');
-        messageDiv.className = `message ${message.type === 'USER' ? 'sent' : 'received'}`;
+        console.log(message)
+
+
+        messageDiv.className = `message ${message.type === 'sent' ? 'sent' : 'received'}`;
         messageDiv.dataset.messageId = message.id;
 
         // 消息头像
@@ -2014,23 +2093,30 @@
     `;
         messagesContainer.appendChild(errorDiv);
     }
-    // 处理退出登录
+    /**
+     * 处理退出登录
+     */
     function handleLogout() {
         if (confirm('确定要退出登录吗？')) {
             // 清除登录状态
             isLoggedIn = false;
             currentUser = null;
-            localStorage.removeItem('currentUser');
-            localStorage.removeItem('token');
+            AUTH_TOKEN = '';
+
+            // 清除本地存储中的登录状态
+            clearLoginStateFromStorage();
 
             // 重置界面状态
             updateUserInterface();
             resetCurrentSkill();
 
             // 隐藏用户下拉菜单
-            document.getElementById('userDropdown').classList.remove('active');
+            const userDropdown = document.getElementById('userDropdown');
+            if (userDropdown) {
+                userDropdown.classList.remove('active');
+            }
 
-            // alert('已成功退出登录');
+            console.log('已退出登录');
         }
     }
     /** 更新聊天历史列表UI */
@@ -2111,19 +2197,7 @@
             second: '2-digit'
         });
     }
-    // 直接退出登录
-    function loginout() {
-        // 清除登录状态
-        isLoggedIn = false;
-        currentUser = null;
-        localStorage.removeItem('currentUser');
-        localStorage.removeItem('token');
-        // 重置界面状态
-        updateUserInterface();
-        resetCurrentSkill();
-        // 隐藏用户下拉菜单
-        document.getElementById('userDropdown').classList.remove('active');
-    }
+
     /** 防XSS攻击：转义HTML特殊字符 */
     function escapeHtml(unsafe) {
         if (!unsafe) return '';
@@ -2208,9 +2282,14 @@
             handleFileSelect(files);
         }
     }
-    // 隐藏登录模态框
+    /**
+     * 隐藏登录模态框
+     */
     function hideLoginModal() {
-        document.getElementById('loginModal').classList.remove('active');
+        const loginModal = document.getElementById('loginModal');
+        if (loginModal) {
+            loginModal.classList.remove('active');
+        }
     }
 
     // 绑定事件
@@ -2288,7 +2367,7 @@
 
         // 上传图片按钮
         document.getElementById('uploadImageButton').addEventListener('click', () => {
-            if (!checkAuth()) return;
+            // if (!checkAuth()) return;
             document.getElementById('imageInput').click();
         });
 
@@ -2309,7 +2388,7 @@
 
         skillSelectorBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            if (!checkAuth()) return;
+            // if (!checkAuth()) return;
             skillSelectorMenu.classList.toggle('show');
         });
 
@@ -2660,7 +2739,7 @@
         skillItem.dataset.command = skill.command;
 
         skillItem.addEventListener('click', () => {
-            if (!checkAuth()) return;
+            // if (!checkAuth()) return;
             selectSkill(skill);
         });
 
@@ -2705,11 +2784,42 @@
         console.log('已选择技能:', skill.name);
     }
 
+    /**
+     * 清除本地存储中的登录状态
+     */
+    function clearLoginStateFromStorage() {
+        try {
+            localStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
+            localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+            console.log('已清除本地存储中的登录状态');
+        } catch (error) {
+            console.error('清除登录状态失败:', error);
+        }
+    }
+
+
+
+    // 检查登录状态
+    function checkLoginStatus() {
+        const savedUser = localStorage.getItem('currentUser');
+        const token = localStorage.getItem('token');
+
+        if (savedUser && token) {
+            currentUser = JSON.parse(savedUser);
+            isLoggedIn = true;
+            updateUserInterface();
+        }
+    }
+
 
     // ================= 页面加载完成后初始化 =================
     document.addEventListener('DOMContentLoaded', function() {
         console.log('初始化聊天系统...');
+        // // 1. 恢复登录状态（新增）
+        // checkAndRestoreAuth();
 
+        // 检查登录状态
+        checkLoginStatus();
 
         loadSkills();
         // 1. 加载本地存储的聊天记录
