@@ -1405,28 +1405,22 @@
             if (contentType && contentType.includes('application/json')) {
                 return await response.json();
             } else if (contentType && contentType.includes('image/')) {
-                // 处理图片响应
                 const blob = await response.blob();
-                return new Promise((resolve) => {
-                    const reader = new FileReader();
-                    reader.onloadend = () => {
-                        resolve({
-                            success: true,
-                            data: {
-                                id: 'img_' + Date.now(),
-                                type: 'received', // 统一消息类型为received（与前端一致）
-                                content: '',
-                                images: [reader.result], // 关键：存入images数组
-                                timestamp: new Date().toISOString()
-                            }
-                        });
-                    };
-                    reader.readAsDataURL(blob);
-                });
-            } else {
-                // 处理文本响应
-                const text = await response.text();
-                return { success: true, data: text };
+                const imageId = 'ai_img_' + Date.now();
+                // 保存到浏览器缓存
+                await browserCache.saveImage(imageId, blob);
+                // 生成临时URL用于显示
+                const imageUrl = URL.createObjectURL(blob);
+                return {
+                    success: true,
+                    data: {
+                        id: imageId,
+                        type: 'AI',
+                        content: '',
+                        imageId: imageId, // 存储imageId而非完整数据
+                        timestamp: new Date().toISOString()
+                    }
+                };
             }
         } catch (error) {
             console.error('API请求失败:', error);
@@ -1435,21 +1429,7 @@
     }
     // ================= 本地存储核心函数 =================
     /** 从本地存储加载聊天记录 */
-    function loadFromLocalStorage() {
-        try {
-            const savedSessions = localStorage.getItem(CONFIG.STORAGE_KEYS.CHAT_SESSIONS);
-            const savedCurrentChatId = localStorage.getItem(CONFIG.STORAGE_KEYS.CURRENT_CHAT_ID);
-            // 加载会话（默认空对象）
-            chatSessions = savedSessions ? JSON.parse(savedSessions) : {};
-            // 加载当前聊天ID（默认第一个会话ID）
-            currentChatId = savedCurrentChatId && chatSessions[savedCurrentChatId] ? savedCurrentChatId : Object.keys(chatSessions)[0] || null;
-            console.log('从本地存储加载成功：', { chatSessions, currentChatId });
-        } catch (error) {
-            console.error('加载本地存储失败：', error);
-            chatSessions = {};
-            currentChatId = null;
-        }
-    }
+
 
     /**
      * 更新技能选择器的可用状态
@@ -1583,31 +1563,120 @@
         }
     }
 
-
-    /** 保存聊天记录到本地存储 */
-    function saveToLocalStorage() {
+    // 从浏览器缓存加载聊天记录（替换原loadFromLocalStorage）
+    async function loadFromLocalStorage() {
         try {
-            localStorage.setItem(CONFIG.STORAGE_KEYS.CHAT_SESSIONS, JSON.stringify(chatSessions));
-            if (currentChatId) {
-                localStorage.setItem(CONFIG.STORAGE_KEYS.CURRENT_CHAT_ID, currentChatId);
+            await browserCache.initDB(); // 确保数据库初始化完成
+            const allSessions = await new Promise((resolve) => {
+                const transaction = browserCache.db.transaction([browserCache.chatStoreName], 'readonly');
+                const store = transaction.objectStore(browserCache.chatStoreName);
+                const request = store.getAll();
+                request.onsuccess = () => resolve(request.result);
+            });
+
+            if (allSessions.length > 0) {
+                chatSessions = allSessions.reduce((obj, session) => {
+                    obj[session.chatId] = session;
+                    return obj;
+                }, {});
+                currentChatId = allSessions[0].chatId;
             }
-            console.log('保存到本地存储成功');
+            console.log('从浏览器缓存加载成功');
         } catch (error) {
-            console.error('保存本地存储失败：', error);
+            console.error('加载浏览器缓存失败:', error);
+            chatSessions = {};
+            currentChatId = null;
         }
     }
 
-    // ================= 聊天会话核心函数 =================
-    /** 初始化聊天会话（无会话则创建新的） */
-    function initChatSessions() {
-        if (Object.keys(chatSessions).length === 0) {
-            console.log('无历史会话，创建新对话');
-            createNewChat();
-        } else {
-            // 切换到当前聊天ID（默认第一个）
-            switchToChat(currentChatId || Object.keys(chatSessions)[0]);
+    // 保存聊天记录到浏览器缓存（替换原saveToLocalStorage）
+    async function saveToLocalStorage() {
+        try {
+            await browserCache.initDB();
+            if (currentChatId && chatSessions[currentChatId]) {
+                await browserCache.saveChatSession(currentChatId, chatSessions[currentChatId]);
+            }
+            console.log('保存到浏览器缓存成功');
+        } catch (error) {
+            console.error('保存浏览器缓存失败:', error);
         }
     }
+
+    // 增强清理旧会话的函数，支持指定保留数量
+    function clearOldChats(keepCount = 5) {
+        if (Object.keys(chatSessions).length <= keepCount) return;
+
+        // 按更新时间排序（旧的在前，新的在后）
+        const sortedChats = Object.values(chatSessions).sort((a, b) => {
+            return new Date(a.updatedAt) - new Date(b.updatedAt);
+        });
+
+        // 需要删除的旧会话
+        const chatsToRemove = sortedChats.slice(0, sortedChats.length - keepCount);
+        chatsToRemove.forEach(chat => {
+            delete chatSessions[chat.id];
+            console.log('清理旧会话：', chat.id);
+        });
+
+        // 如果当前会话被删除了，切换到最新的会话
+        if (!chatSessions[currentChatId]) {
+            currentChatId = sortedChats[sortedChats.length - 1].id;
+        }
+    }
+
+    // 定期检查并清理（可选，比如每小时检查一次）
+    setInterval(() => {
+        // 当会话数量超过10个时，自动清理到保留5个
+        if (Object.keys(chatSessions).length > 10) {
+            clearOldChats(5);
+            saveToLocalStorage();
+        }
+    }, 3600000); // 3600000毫秒 = 1小时
+
+    // 添加清理旧聊天记录的函数
+    function clearOldChats() {
+        const sortedChats = Object.values(chatSessions).sort((a, b) => {
+            return new Date(a.updatedAt) - new Date(b.updatedAt);
+        });
+        // 保留最近的5个会话
+        if (sortedChats.length > 5) {
+            const chatsToRemove = sortedChats.slice(0, sortedChats.length - 5);
+            chatsToRemove.forEach(chat => {
+                delete chatSessions[chat.id];
+            });
+            saveToLocalStorage();
+        }
+    }
+    // 修改初始化函数，确保正确加载
+    function initChatSessions() {
+        try {
+            // 从本地存储加载
+            const savedSessions = localStorage.getItem(CONFIG.STORAGE_KEYS.CHAT_SESSIONS);
+            const savedCurrentChatId = localStorage.getItem(CONFIG.STORAGE_KEYS.CURRENT_CHAT_ID);
+
+            if (savedSessions) {
+                chatSessions = JSON.parse(savedSessions);
+                currentChatId = savedCurrentChatId || Object.keys(chatSessions)[0];
+            }
+
+            // 确保至少有一个会话
+            if (Object.keys(chatSessions).length === 0) {
+                console.log('无历史会话，创建新对话');
+                createNewChat();
+            } else {
+                // 切换到当前聊天ID
+                switchToChat(currentChatId || Object.keys(chatSessions)[0]);
+            }
+        } catch (error) {
+            console.error('初始化聊天会话失败：', error);
+            // 初始化失败时重置
+            chatSessions = {};
+            currentChatId = null;
+            createNewChat();
+        }
+    }
+
+
 
     /** 创建新聊天会话 */
     function createNewChat() {
@@ -1657,25 +1726,35 @@
     function switchToChat(chatId) {
         try {
             if (!chatSessions[chatId]) {
-                console.error('切换聊天失败：会话不存在', chatId);
+                console.error('切换聊天失败：会话不存在');
                 return;
             }
+
             // 更新当前聊天ID
             currentChatId = chatId;
             const currentChat = chatSessions[chatId];
+
             // 更新聊天标题UI
             const chatNameEl = document.getElementById(CONFIG.CHAT_NAME);
             if (chatNameEl) chatNameEl.textContent = currentChat.title;
+
             // 清空消息容器并重新渲染所有消息
             const messagesContainer = document.getElementById(CONFIG.MESSAGES_CONTAINER);
-            if (messagesContainer) messagesContainer.innerHTML = '';
-            currentChat.messages.forEach(message => addMessageToUI(message));
+            if (messagesContainer) {
+                messagesContainer.innerHTML = '';
+                // 重新渲染所有消息，包括图片
+                currentChat.messages.forEach(message => addMessageToUI(message));
+            }
+
             // 保存当前聊天ID到本地存储
             saveToLocalStorage();
+
             // 更新聊天历史列表UI
             updateChatHistoryList();
+
             // 滚动到最新消息
             scrollToBottom();
+
             console.log('切换到聊天会话：', chatId);
         } catch (error) {
             console.error('切换聊天失败：', error);
@@ -1706,6 +1785,56 @@
             console.error('删除聊天失败：', error);
             alert('删除聊天失败，请刷新页面重试');
         }
+    }
+
+    // 修改添加消息到UI的函数，确保正确显示图片
+    function addMessageToUI(message) {
+        const messagesContainer = document.getElementById(CONFIG.MESSAGES_CONTAINER);
+        if (!messagesContainer) return;
+
+        // 移除空状态提示
+        const emptyState = document.getElementById('emptyState');
+        if (emptyState) {
+            emptyState.remove();
+        }
+
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `message ${message.type}`;
+        messageDiv.dataset.messageId = message.id;
+
+        // 构建消息内容
+        let messageContent = '';
+
+        // 添加文本内容
+        if (message.content && message.content.trim() !== '') {
+            messageContent += `<div class="message-text">${escapeHtml(message.content)}</div>`;
+        }
+
+        // 添加图片
+        if (message.images && message.images.length > 0) {
+            message.images.forEach(imageData => {
+                messageContent += `
+                <div class="message-image">
+                    <img src="${imageData}" alt="消息图片"
+                         style="max-width: 300px; max-height: 300px; border-radius: 8px;">
+                </div>
+            `;
+            });
+        }
+
+        // 设置消息HTML
+        messageDiv.innerHTML = `
+        <div class="message-avatar">
+            <i class="${message.type === 'sent' ? 'fas fa-user' : 'fas fa-robot'}"></i>
+        </div>
+        <div class="message-content">
+            ${messageContent}
+            <div class="message-time">${formatTimestamp(message.timestamp)}</div>
+        </div>
+    `;
+
+        messagesContainer.appendChild(messageDiv);
+        scrollToBottom();
     }
 
     // ================= 消息发送与接收核心函数 =================
@@ -1774,41 +1903,39 @@
                 }),
                 credentials: 'include' // 跨域时携带Cookie（如果后端用Cookie认证）
             });
-
-
-            // 11. 解析后端响应
             const result = await response.json();
+
             // 添加用户消息到UI
             addMessageToUI(userMessage);
-            console.log(result.images)
-            console.log("result.imageData")
-            addMessageToUI(result.images);
 
-            if (!response.ok) {
-                throw new Error(result.message || `请求失败（状态码：${response.status}）`);
-            }
-            if (!result.success) {
-                throw new Error(result.message || '后端处理失败');
+            // 处理AI回复，包括可能的图片
+            let assistantMessage;
+            if (result.imageData) {
+                // 有图片的回复
+                assistantMessage = {
+                    id: Date.now() + 1,
+                    type: 'received',
+                    content: result.reply || '这是生成的图片：',
+                    images: [result.imageData],  // 存储图片数据
+                    timestamp: new Date().toISOString()
+                };
+            } else {
+                // 纯文本回复
+                assistantMessage = {
+                    id: Date.now() + 1,
+                    type: 'received',
+                    content: result.reply || '暂无回复',
+                    images: [],
+                    timestamp: new Date().toISOString()
+                };
             }
 
-            messageInput.value = '';
-            clearPendingImages(); // 清空待发送图片
-            // saveToLocalStorage(); // 保存到本地存储
-            scrollToBottom(); // 滚动到最新消息
-            console.log('发送用户消息：', userMessage);
-            // 12. 创建助手回复并更新UI
-            const assistantMessage = {
-                id: Date.now() + 1,
-                type: 'received',
-                content: result.result || '暂无回复',
-                images: [],
-                timestamp: new Date().toISOString()
-            };
+            // 添加AI回复到会话并保存
             currentChat.messages.push(assistantMessage);
             currentChat.updatedAt = new Date().toISOString();
+            addMessageToUI(assistantMessage);
 
-            // saveToLocalStorage(); // 保存回复到本地存储
-            console.log('接收助手回复：', assistantMessage);
+
         } catch (error) {
             console.error('发送消息失败：', error);
             showErrorMessage('发送失败：' + error.message);
@@ -1880,100 +2007,80 @@
     }
     // ================= 图片处理函数 =================
     /** 处理图片上传（暂存 + 预览） */
+
+
+// 处理图片上传（修改原handleImageUpload）
     function handleImageUpload(files) {
         try {
             if (!files || files.length === 0) return;
             Array.from(files).forEach(file => {
-                // 只允许图片文件
                 if (!file.type.startsWith('image/')) {
-                    alert('请上传图片格式的文件（JPG/PNG/GIF等）～');
+                    alert('请上传图片格式的文件～');
                     return;
                 }
+                // 直接读取为Blob（而非Base64）
                 const reader = new FileReader();
                 reader.onload = (e) => {
-                    const dataUrl = e.target.result;
-                    // 暂存图片
-                    pendingImages.push({ file, dataUrl });
-                    // 显示图片预览
-                    showImagePreview(dataUrl);
-                    console.log('暂存上传图片：', file.name);
+                    const blob = new Blob([e.target.result], { type: file.type });
+                    const imageId = `img_${Date.now()}_${Math.random()}`;
+                    // 保存图片到IndexedDB
+                    browserCache.saveImage(imageId, blob).then(() => {
+                        // 待发送列表只存imageId（不存完整数据）
+                        pendingImages.push({ imageId, name: file.name, type: file.type });
+                        showImagePreview(URL.createObjectURL(blob)); // 临时URL用于预览
+                        console.log('图片已保存到浏览器缓存');
+                    });
                 };
-                reader.readAsDataURL(file);
+                reader.readAsArrayBuffer(file); // 读取为ArrayBuffer，便于转Blob
             });
         } catch (error) {
-            console.error('图片上传失败：', error);
-            alert('图片上传失败，请重试～');
+            console.error('图片处理失败:', error);
         }
     }
 
-    /** 显示图片预览 */
-    function showImagePreview(dataUrl) {
+    // 显示图片预览（修改原showImagePreview）
+    function showImagePreview(blobUrl) {
         const previewContainer = document.getElementById(CONFIG.IMAGE_PREVIEW_CONTAINER);
-        if (!previewContainer) return; // 没有预览容器则不显示
+        if (!previewContainer) return;
         const previewEl = document.createElement('div');
         previewEl.className = 'image-preview-item';
         previewEl.innerHTML = `
-        <img src="${dataUrl}" alt="预览图片" style="max-width: 100px; max-height: 100px; margin: 0 5px 5px 0; border-radius: 4px;">
-        <button class="remove-preview-btn" style="position: relative; top: -20px; right: 10px; background: #ff4d4f; color: white; border: none; border-radius: 50%; width: 20px; height: 20px; cursor: pointer; font-size: 12px;">×</button>
-    `;
-        // 绑定删除预览图片事件
-        previewEl.querySelector('.remove-preview-btn').addEventListener('click', (e) => {
-            e.stopPropagation();
+    <img src="${blobUrl}" alt="预览图片" style="max-width: 100px; max-height: 100px;">
+    <button class="remove-preview-btn">×</button>
+  `;
+        previewEl.querySelector('.remove-preview-btn').addEventListener('click', () => {
             previewEl.remove();
-            // 从pendingImages中移除对应的图片
-            pendingImages = pendingImages.filter(img => img.dataUrl !== dataUrl);
-            console.log('移除预览图片');
+            URL.revokeObjectURL(blobUrl); // 释放临时URL
         });
         previewContainer.appendChild(previewEl);
     }
 
-    /** 清空待发送图片 */
-    function clearPendingImages() {
-        pendingImages = [];
-        updateImageThumbnails();
-    }
+
+
 
     // ================= UI渲染辅助函数 =================
-    function addMessageToUI(message) {
-        const messagesContainer = document.getElementById(CONFIG.MESSAGES_CONTAINER);
-        if (!messagesContainer) return;
-
-        // 移除空状态（如果存在）
-        const emptyState = document.getElementById('emptyState');
-        if (emptyState) emptyState.remove();
-
-        const messageDiv = document.createElement('div');
-        messageDiv.className = `message ${message.type}`; // type: 'sent' 或 'received'
-        messageDiv.dataset.id = message.id;
-
-        // 组装消息内容（文本 + 图片）
-        let contentHtml = '';
-        // 渲染文本内容
-        if (message.content) {
-            contentHtml += `<div class="message-text">${message.content}</div>`;
+    function saveToLocalStorage() {
+        try {
+            // 确保chatSessions和currentChatId存在
+            if (chatSessions && typeof chatSessions === 'object') {
+                localStorage.setItem(
+                    CONFIG.STORAGE_KEYS.CHAT_SESSIONS,
+                    JSON.stringify(chatSessions)
+                );
+            }
+            if (currentChatId) {
+                localStorage.setItem(CONFIG.STORAGE_KEYS.CURRENT_CHAT_ID, currentChatId);
+            }
+            console.log('保存到本地存储成功');
+        } catch (error) {
+            console.error('保存本地存储失败：', error);
+            // 处理存储容量超限的情况
+            if (error.name === 'QuotaExceededError') {
+                alert('本地存储空间不足，部分聊天记录可能无法保存');
+                // 可选：清理旧数据
+                clearOldChats();
+            }
         }
-        // 渲染图片（关键：遍历images数组）
-        if (message.images && message.images.length > 0) {
-            message.images.forEach(imgDataUrl => {
-                contentHtml += `
-                <div class="message-image">
-                    <img src="${imgDataUrl}" alt="聊天图片"
-                         style="max-width: 300px; max-height: 300px; border-radius: 8px; margin: 5px 0;">
-                </div>
-            `;
-            });
-        }
-
-        // 组装消息DOM（包含头像和内容）
-        messageDiv.innerHTML = `
-        <div class="message-avatar">
-            <i class="${message.type === 'sent' ? 'fas fa-user' : 'fas fa-robot'}"></i>
-        </div>
-        <div class="message-bubble">${contentHtml}</div>
-    `;
-
-        messagesContainer.appendChild(messageDiv);
-        scrollToBottom(); // 滚动到最新消息
     }
     // 重置当前技能
     function resetCurrentSkill() {
@@ -2143,6 +2250,103 @@
         }
     }
 
+    // IndexedDB 工具类：管理聊天记录和图片
+    class BrowserCache {
+        constructor() {
+            this.dbName = 'ChatCacheDB';
+            this.chatStoreName = 'chatSessions'; // 存储聊天会话
+            this.imageStoreName = 'images'; // 存储图片Blob
+            this.initDB();
+        }
+
+        // 初始化数据库
+        initDB() {
+            return new Promise((resolve, reject) => {
+                const request = window.indexedDB.open(this.dbName, 1);
+
+                // 数据库版本升级时创建存储对象
+                request.onupgradeneeded = (event) => {
+                    const db = event.target.result;
+                    // 创建聊天会话存储（以chatId为键）
+                    if (!db.objectStoreNames.contains(this.chatStoreName)) {
+                        db.createObjectStore(this.chatStoreName, { keyPath: 'chatId' });
+                    }
+                    // 创建图片存储（以图片ID为键）
+                    if (!db.objectStoreNames.contains(this.imageStoreName)) {
+                        db.createObjectStore(this.imageStoreName, { keyPath: 'imageId' });
+                    }
+                };
+
+                request.onsuccess = (event) => {
+                    this.db = event.target.result;
+                    resolve();
+                };
+
+                request.onerror = (event) => {
+                    console.error('IndexedDB初始化失败:', event.target.error);
+                    reject(event.target.error);
+                };
+            });
+        }
+
+        // 保存聊天会话
+        saveChatSession(chatId, sessionData) {
+            return new Promise((resolve, reject) => {
+                const transaction = this.db.transaction([this.chatStoreName], 'readwrite');
+                const store = transaction.objectStore(this.chatStoreName);
+                const request = store.put({ chatId, ...sessionData });
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // 获取聊天会话
+        getChatSession(chatId) {
+            return new Promise((resolve, reject) => {
+                const transaction = this.db.transaction([this.chatStoreName], 'readonly');
+                const store = transaction.objectStore(this.chatStoreName);
+                const request = store.get(chatId);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // 保存图片（存储Blob而非Base64）
+        saveImage(imageId, blob) {
+            return new Promise((resolve, reject) => {
+                const transaction = this.db.transaction([this.imageStoreName], 'readwrite');
+                const store = transaction.objectStore(this.imageStoreName);
+                // 存储Blob和元数据
+                const request = store.put({
+                    imageId,
+                    blob,
+                    timestamp: new Date().toISOString()
+                });
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // 获取图片Blob
+        getImage(imageId) {
+            return new Promise((resolve, reject) => {
+                const transaction = this.db.transaction([this.imageStoreName], 'readonly');
+                const store = transaction.objectStore(this.imageStoreName);
+                const request = store.get(imageId);
+                request.onsuccess = () => resolve(request.result?.blob);
+                request.onerror = () => reject(request.error);
+            });
+        }
+    }
+
+    // 初始化缓存实例
+    const browserCache = new BrowserCache();
+
+
+
+
+
+
     /** 滚动到最新消息 */
     function scrollToBottom() {
         const messagesContainer = document.getElementById(CONFIG.MESSAGES_CONTAINER);
@@ -2153,19 +2357,13 @@
 
     // ================= 工具函数 =================
     /** 格式化时间戳（例：2025-11-21 14:30:25） */
+// 添加时间格式化函数
     function formatTimestamp(timestamp) {
         const date = new Date(timestamp);
-        return date.toLocaleString('zh-CN', {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit'
-        });
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
-    /** 防XSS攻击：转义HTML特殊字符 */
+    // 添加HTML转义函数，防止XSS
     function escapeHtml(unsafe) {
         if (!unsafe) return '';
         return unsafe
@@ -2804,4 +3002,3 @@
 
 </body>
 </html>
-
