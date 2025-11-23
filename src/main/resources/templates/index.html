@@ -1345,8 +1345,8 @@
 
     // 本地存储键名定义
     const STORAGE_KEYS = {
-        CHAT_SESSIONS: 'image_assistant_chat_sessions',
-        CURRENT_CHAT_ID: 'image_assistant_current_chat_id'
+        AUTH_TOKEN: 'doubao_auth_token', // 确保存在此键
+        CURRENT_USER: 'doubao_current_user',
     };
     // ================= 基础配置（根据页面实际结构修改）=================
     const CONFIG = {
@@ -2344,9 +2344,6 @@
 
 
 
-
-
-
     /** 滚动到最新消息 */
     function scrollToBottom() {
         const messagesContainer = document.getElementById(CONFIG.MESSAGES_CONTAINER);
@@ -2963,11 +2960,11 @@
     }
 
 
-
     // 检查登录状态
     function checkLoginStatus() {
-        const savedUser = localStorage.getItem('currentUser');
-        const token = localStorage.getItem('token');
+        // 修复：使用 STORAGE_KEYS 常量读取，与保存时的键名保持一致
+        const savedUser = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
+        const token = localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
 
         if (savedUser && token) {
             currentUser = JSON.parse(savedUser);
