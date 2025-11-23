@@ -1789,6 +1789,7 @@
 
     // 修改添加消息到UI的函数，确保正确显示图片
     function addMessageToUI(message) {
+        console.log(message)
         const messagesContainer = document.getElementById(CONFIG.MESSAGES_CONTAINER);
         if (!messagesContainer) return;
 
@@ -1883,8 +1884,6 @@
             }
 
 
-
-
             // 9. 对接后端获取助手回复（核心）
             isProcessing = true;
             showLoadingIndicator(); // 显示加载中
@@ -1904,7 +1903,7 @@
                 credentials: 'include' // 跨域时携带Cookie（如果后端用Cookie认证）
             });
             const result = await response.json();
-
+            console.log("用户用户用户用户用户用户用户用户用户")
             // 添加用户消息到UI
             addMessageToUI(userMessage);
 
@@ -1925,7 +1924,7 @@
                     id: Date.now() + 1,
                     type: 'received',
                     content: result.reply || '暂无回复',
-                    images: [],
+                    images: pendingImages.map(img => img.data),
                     timestamp: new Date().toISOString()
                 };
             }
@@ -1933,8 +1932,9 @@
             // 添加AI回复到会话并保存
             currentChat.messages.push(assistantMessage);
             currentChat.updatedAt = new Date().toISOString();
+            console.log("客户端客户端客户端客户端客户端客户端客户端")
             addMessageToUI(assistantMessage);
-
+            saveToLocalStorage();
 
         } catch (error) {
             console.error('发送消息失败：', error);
@@ -2076,7 +2076,7 @@
             console.error('保存本地存储失败：', error);
             // 处理存储容量超限的情况
             if (error.name === 'QuotaExceededError') {
-                alert('本地存储空间不足，部分聊天记录可能无法保存');
+                // alert('本地存储空间不足，部分聊天记录可能无法保存');
                 // 可选：清理旧数据
                 clearOldChats();
             }
